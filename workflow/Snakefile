@@ -1,0 +1,391 @@
+# To run snakemake --use-conda  -s Snakefile -c 2 --latency-wait 10
+#Run 'motus downloadDB' before using the motus profiler
+
+nThreads   = 4
+dir_input  = "/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/input"
+dir_output = "/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/output"
+
+# We need to specify all unique samples here once (later this goes into a config file)
+# Dirty approach here: Use all files from particular directory to colelct sample names
+allSamplesUnique, = glob_wildcards("/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/input/rawdata/{id}_1_sequence.txt.gz")
+
+# Append to this list all files you want to have in the end (it is enough to specify the output files from the last rule usually)
+allResultFiles = []
+
+motus_allBAMs = expand('{dir}/motus_v3.0.1/{sample}.motus', 
+    dir = dir_output, sample = allSamplesUnique)
+allResultFiles.extend(motus_allBAMs)
+
+
+# Rules that can run locally and do not need a designated cluster submission
+localrules: all
+
+# Update the allResultFiles array if you need additional output files outside of the normal dependency chain
+rule all:
+    input: allResultFiles
+
+####################################################################################################
+
+# 1. Read QC (FastQC)
+# https://snakemake-wrappers.readthedocs.io/en/0.71.0/wrappers/fastqc.html
+
+rule fastqc:
+    input:
+        forwardRead = dir_input + "/rawdata/{sample}_1_sequence.txt.gz",
+        reverseRead = dir_input + "/rawdata/{sample}_2_sequence.txt.gz"
+    output:
+        html1       = dir_output + "/qc/fastqc/{sample}_1_sequence_fastqc.html",
+        html2       = dir_output + "/qc/fastqc/{sample}_2_sequence_fastqc.html",
+        zip1        = dir_output + "/qc/fastqc/{sample}_1_sequence_fastqc.zip",
+        zip2        = dir_output + "/qc/fastqc/{sample}_2_sequence_fastqc.zip" # the suffix _fastqc.zip is necessary for multiqc to find the file. If not using multiqc, you are free to choose an arbitrary filename
+    params: 
+        outdir      = dir_output + "/qc/fastqc"
+    log: 
+        dir_output + "/logs/fastqc/{sample}.log"
+    message: 
+        "Running fastQC for sample {wildcards.sample}"
+    threads: 
+        nThreads
+    conda: 
+        "envs/Preprocess.yaml"
+    shell:
+        """
+        fastqc \
+            {input} \
+            -t {threads} \
+            -o {params.outdir}
+        """
+
+####################################################################################################
+
+# 2. Adapter clipping and merging (short-read: fastp)
+# https://snakemake-wrappers.readthedocs.io/en/stable/wrappers/fastp.html
+rule fastp_pe:
+    input:
+        sample    = [dir_input +  "/rawdata/{sample}_1_sequence.txt.gz", dir_input + "/rawdata/{sample}_2_sequence.txt.gz"],
+        fastqc    = rules.fastqc.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
+    output:
+        trimmed   = [dir_output + "/processed_data/trimmed/{sample}.1.fastq", dir_output + "/processed_data/trimmed/{sample}.2.fastq"],
+        # Unpaired reads separately
+        unpaired1 = dir_output + "/processed_data/trimmed/{sample}.u1.fastq",
+        unpaired2 = dir_output + "/processed_data/trimmed/{sample}.u2.fastq",
+        # or in a single file
+        # unpaired="trimmed/pe/{sample}.singletons.fastq",
+        merged    = dir_output + "/processed_data/trimmed/{sample}.merged.fastq",
+        failed    = dir_output + "/processed_data/trimmed/{sample}.failed.fastq",
+        html      = dir_output + "/report/{sample}.html",
+        json      = dir_output + "/report/{sample}.json"
+    message:
+        "Running fastp for sample {wildcards.sample}"
+    log:
+        dir_output + "/logs/fastp/{sample}.log"
+    params:
+        adapters  = dir_input + "/adapt.fas", 
+        extra     = "--merge"
+    threads: 
+        nThreads
+    wrapper:
+        "v1.19.1/bio/fastp"
+
+
+####################################################################################################
+
+# 3. Low complexity and quality filtering (short-read: bbduk)
+# https://snakemake-wrappers.readthedocs.io/en/stable/wrappers/bbtools/bbduk.html
+
+rule bbduk_pe:
+    input:
+        sample    = [rules.fastp_pe.output.trimmed[0], rules.fastp_pe.output.trimmed[1]],
+        adapters  = dir_input + "/adapt.fas"
+    output:
+        trimmed   = [dir_output + "/processed_data/filtered/{sample}.1.fastq", dir_output + "/processed_data/filtered/{sample}.2.fastq"],
+        singleton = dir_output + "/processed_data/filtered/{sample}.single.fastq",
+        discarded = dir_output + "/processed_data/filtered/{sample}.discarded.fastq",
+        stats     = dir_output + "/processed_data/filtered/{sample}.stats.txt",
+    log:
+         dir_output + "/logs/bbduk_pe/{sample}.log"
+    conda: 
+        "envs/Preprocess.yaml"
+    message:
+        "Running bbduk for sample {wildcards.sample}"
+    params:
+        extra     = lambda w, input: "ref={},adapters,artifacts ktrim=r k=23 mink=11 hdist=1 tpe tbo trimpolygright=10 minlen=25 maxns=30 entropy=0.5 entropywindow=50 entropyk=5".format(input.adapters),
+    threads: 
+        nThreads
+    wrapper:
+        "v1.20.0/bio/bbtools/bbduk"
+
+####################################################################################################
+
+# 4. Read QC (FastQC) after trimming
+
+rule fastqcProcessed:
+    input:
+        forwardRead = rules.bbduk_pe.output.trimmed[0],
+        reverseRead = rules.bbduk_pe.output.trimmed[1],
+    output:
+        html1       = dir_output + "/qc/fastqc_processed/{sample}_1_sequence_fastqc.html",
+        html2       = dir_output + "/qc/fastqc_processed/{sample}_2_sequence_fastqc.html",
+        zip1        = dir_output + "/qc/fastqc_processed/{sample}_1_sequence_fastqc.zip",
+        zip2        = dir_output + "/qc/fastqc_processed/{sample}_2_sequence_fastqc.zip" 
+        # the suffix _fastqc.zip is necessary for multiqc to find the file. 
+        # If not using multiqc, you are free to choose an arbitrary filename
+    params: 
+        outdir      = dir_output  + "/qc/fastqc_processed"
+    log: 
+        dir_output + "/logs/fastqc_processed/{sample}.log"
+    message: 
+        "Running fastQC for sample {wildcards.sample}"
+    threads: 
+        nThreads
+    conda: 
+        "envs/Preprocess.yaml"
+    shell:
+        """
+        fastqc \
+            {input} \
+            -t {threads} \
+            -o {params.outdir}
+        """
+
+####################################################################################################
+
+# 5a. Bowtie2 mapping against host sequence database, keep both aligned and unaligned reads (paired-end reads)
+
+rule human_filtering:
+    input:
+        fastq1 = rules.bbduk_pe.output.trimmed[0],
+        fastq2 = rules.bbduk_pe.output.trimmed[1],
+        #fastqcProcessed = rules.fastqcProcessed.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
+    output:
+        bam    = temp(dir_output + "/processed_data/bam/{sample}_mapped_and_unmapped.bam")
+    log:
+        dir_output + "/logs/bowtie/{sample}.log"
+    message:
+        "Running bowtie human mapping for sample {wildcards.sample}"
+    params:
+       hostDB  = dir_input + "/human_GRCh38/GRCh38_noalt_as"
+    threads: 
+        nThreads
+    conda: 
+        "envs/Preprocess.yaml"
+    shell:
+        """
+        bowtie2 \
+            -p {threads} -x {params.hostDB} \
+            -1 {input.fastq1} \
+            -2 {input.fastq2} 2> {log} | samtools view -bS - > {output.bam}
+        """
+
+####################################################################################################
+
+# 6. Filter  bam files
+
+rule samtools_view:
+    input:
+        bam = rules.human_filtering.output.bam,
+    output:
+        unmappedBam  = dir_output + "/processed_data/bam/{sample}.bothReadsUnmapped.bam",
+        idx = dir_output + "/processed_data/bam/{sample}.bai",
+    log:
+        dir_output + "/logs/samtools/{sample}.log",
+    params:
+        extra="",  # optional params string
+        region="",  # optional region string
+    threads: 2
+    wrapper:
+        "v1.21.0/bio/samtools/view"
+
+####################################################################################################
+
+# 7. Convert a bam file with paired end reads back to unaligned reads in a two separate fastq files with samtools.
+
+rule samtools_fastq_separate:
+    input:
+        unmappedBam  = dir_output + "/processed_data/bam/{sample}.bothReadsUnmapped.bam",
+    output:
+        hostremoved1 = dir_output + "/processed_data/bam/{sample}_host_removed_R1.fastq",
+        hostremoved2 = dir_output + "/processed_data/bam/{sample}_host_removed_R2.fastq",
+    log:
+        dir_output + "/logs/samtools/{sample}.separate.log",
+    params:
+        sort="-m 4G",
+        fastq="-n",
+    threads:
+        nThreads
+    wrapper:
+        "v1.21.0/bio/samtools/fastq/separate"
+
+
+####################################################################################################
+
+# 8. Read QC (FastQC) after trimming
+
+rule fastqc_hostFil:
+    input:
+        forwardRead = rules.samtools_fastq_separate.output.hostremoved1,
+        reverseRead = rules.samtools_fastq_separate.output.hostremoved2,
+    output:
+        html1       = dir_output + "/qc/fastqc_hostFil/{sample}_1_sequence_fastqc.html",
+        html2       = dir_output + "/qc/fastqc_hostFil/{sample}_2_sequence_fastqc.html",
+        zip1        = dir_output + "/qc/fastqc_hostFil/{sample}_1_sequence_fastqc.zip",
+        zip2        = dir_output + "/qc/fastqc_hostFil/{sample}_2_sequence_fastqc.zip" 
+        # the suffix _fastqc.zip is necessary for multiqc to find the file. 
+        # If not using multiqc, you are free to choose an arbitrary filename
+    params: 
+        outdir      = dir_output  + "/qc/fastqc_hostFil"
+    log: 
+        dir_output + "/logs/fastqc_hostFil/{sample}.log"
+    message: 
+        "Running fastQC for sample {wildcards.sample}"
+    threads: 
+        nThreads
+    conda: 
+        "envs/Preprocess.yaml"
+    shell:
+        """
+        fastqc \
+            {input} \
+            -t {threads} \
+            -o {params.outdir}
+        """
+
+####################################################################################################
+
+# 9. Taxonomic profiling by motus v3.0.1
+rule motus_taxa:
+    input:
+        fastq1 = rules.samtools_fastq_separate.output.hostremoved1,
+        fastq2 = rules.samtools_fastq_separate.output.hostremoved2,
+        #fastqc_hostFil = rules.fastqc_hostFil.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
+
+    output:
+        motus  = dir_output + "/motus_v3.0.1/{sample}.motus",
+    log:
+        dir_output + "/logs/motus_v3/{sample}.motus_v3_taxa.log"
+    message:
+        "Running motus taxonomic profiling for sample {wildcards.sample}"
+    params:
+        # -n for output sample name
+        # -M  save the marker gene cluster (MGC) counts
+        # -g marker genes cutoff
+        markerGenesCutoff = 3,
+        # -l min read lenght
+        minReadLength = 75,
+        DBLoc = dir_input 
+    threads: 
+        nThreads
+    conda: 
+       "envs/Preprocess.yaml"
+    shell:
+    # Generating taxonomic profiles
+        """
+        motus profile \
+            -f {input.fastq1} \
+            -r {input.fastq2} \
+            -o {output.motus} \
+            -M \
+            -db {params.DBLoc} \
+            -l {params.minReadLength} \
+            -g {params.markerGenesCutoff} \
+            -n ${wildcards.sample} \
+            -t {threads} &> {log} 
+        """
+
+####################################################################################################
+
+# 10. Merge motus files
+rule motus_merge:
+    input:
+        motus        = dir_output + "/motus_v3.0.1/{sample}.motus",
+    output:
+    log:
+        dir_output + "/logs/motus_v3/{sample}.motus_v3_merged.log"
+    message:
+        "Running motus merge for samples"
+    params:
+        # -d Call metaSNV on all bam files in the directory. [Mandatory]
+        dir_merged = dir_output + "/motus_v3.0.1/",
+    threads: 
+        nThreads
+    conda: 
+       "envs/Preprocess.yaml"
+    shell:
+    # Generating taxonomic profiles
+        """
+        motus merge \
+            -d motus_v3.0.1/ \
+            -t {threads} \
+            -o {params.dir_merged} &> {log} 
+        """
+
+####################################################################################################
+
+# 11. Generating single nucleotide variant (SNV) profiles using MGs 
+rule motus_map_snv:
+    input:
+        fastq1 = rules.samtools_fastq_separate.output.hostremoved1,
+        fastq2 = rules.samtools_fastq_separate.output.hostremoved2,
+    output:
+        sam    = dir_output + "/motus_v3.0.1/meta_snv/sam/{sample}.sam",
+        #bam    = dir_output + "/motus_v3.0.1/meta_snv/bam/{sample}.bam",
+    log:
+        dir_output + "/logs/motus_v3/{sample}.motus_v3_map_snv.log"
+    message:
+        "Running motus merge for samples"
+    params:
+    threads: 
+        nThreads
+    conda: 
+       "envs/Preprocess.yaml"
+    shell:
+        """
+        # Generating single nucleotide variant (SNV) profiles using MGs
+        # map_snv takes one or multiple sequencing files and aligns reads against the mOTU profiler database:
+        motus map_snv \
+            -f {input.fastq1} \
+            -r {input.fastq2} \
+            -l 75 \
+            -t {threads} \
+            -o {output.sam} 
+
+        # samtools view \
+        #     -b {output.sam} - > {output.bam}
+        """
+
+####################################################################################################
+
+# 12. Generating single nucleotide variant (SNV) profiles using MGs 
+rule motus_snv_call:
+    output:
+    log:
+        dir_output + "/logs/motus_v3/{sample}.motus_v3_snv_call.log"
+    message:
+        "Running motus merge for samples"
+    params:
+        # -d Call metaSNV on all bam files in the directory. [Mandatory]
+        motus_snv = dir_output + "/motus_v3.0.1/meta_snv/",
+        bam       = dir_output + "/motus_v3.0.1/meta_snv/bam"
+    threads: 
+        nThreads
+    conda: 
+       "envs/Preprocess.yaml"
+    shell:
+        """
+        # snv_call calls variants using the metaSNV package
+        motus snv_call \
+            -d {params.bam} \
+            -o {params.motus_snv} &> {log} 
+        """
+
+
+
+#     # The quality of assembly can be assessed by tools such as MetaQUAST
+
+
+# #Perform optional post-processing with:
+# #bracken
+# #Standardises output tables
+# #Present QC for raw reads (MultiQC)
+# #Plotting Kraken2, Centrifuge, Kaiju and MALT results (Krona)
+
