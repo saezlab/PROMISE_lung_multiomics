@@ -1,0 +1,17 @@
+name: Preprocess
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+  - nodefaults
+dependencies:
+  - fastqc
+  - fastp
+  - bbmap=39.01
+  - bowtie2
+  - samtools
+  - motus=3.0.3
+  - snakemake-wrapper-utils =0.5.0
+  - bedtools
+
+  
