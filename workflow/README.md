@@ -9,8 +9,3 @@ snakemake --use-conda -n
 
 3. Install dependencies
 snakemake --conda-create-envs-only --use-conda -c1
-
-4. Download data
-snakemake --use-conda -c1
-
-snakemake --use-conda  -s Snakefile -c4

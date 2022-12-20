@@ -1,7 +1,11 @@
-# To run snakemake --use-conda  -s Snakefile -c 2 --latency-wait 10
+# To run snakemake -s Snakefile --profile profile/config.yaml 
 #Run 'motus downloadDB' before using the motus profiler
 
-nThreads   = 4
+nThreads   = 8
+
+# import timedelta
+from datetime import timedelta
+
 dir_input  = "/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/input"
 dir_output = "/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/output"
 
@@ -12,10 +16,13 @@ allSamplesUnique, = glob_wildcards("/Users/ecekartal/Documents/SAEZ/projects/PRO
 # Append to this list all files you want to have in the end (it is enough to specify the output files from the last rule usually)
 allResultFiles = []
 
-motus_allBAMs = expand('{dir}/motus_v3.0.1/{sample}.motus', 
+motus = expand('{dir}/motus_v3.0.1/taxa/merged.taxa', 
+    dir = dir_output, sample = allSamplesUnique)
+allResultFiles.extend(motus)
+
+motus_allBAMs = expand('{dir}/motus_v3.0.1/snv/motus_snv', 
     dir = dir_output, sample = allSamplesUnique)
 allResultFiles.extend(motus_allBAMs)
-
 
 # Rules that can run locally and do not need a designated cluster submission
 localrules: all
@@ -37,7 +44,9 @@ rule fastqc:
         html1       = dir_output + "/qc/fastqc/{sample}_1_sequence_fastqc.html",
         html2       = dir_output + "/qc/fastqc/{sample}_2_sequence_fastqc.html",
         zip1        = dir_output + "/qc/fastqc/{sample}_1_sequence_fastqc.zip",
-        zip2        = dir_output + "/qc/fastqc/{sample}_2_sequence_fastqc.zip" # the suffix _fastqc.zip is necessary for multiqc to find the file. If not using multiqc, you are free to choose an arbitrary filename
+        zip2        = dir_output + "/qc/fastqc/{sample}_2_sequence_fastqc.zip" 
+        # the suffix _fastqc.zip is necessary for multiqc to find the file. 
+        # If not using multiqc, you are free to choose an arbitrary filename
     params: 
         outdir      = dir_output + "/qc/fastqc"
     log: 
@@ -48,6 +57,12 @@ rule fastqc:
         nThreads
     conda: 
         "envs/Preprocess.yaml"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 2000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=60 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+
     shell:
         """
         fastqc \
@@ -62,10 +77,12 @@ rule fastqc:
 # https://snakemake-wrappers.readthedocs.io/en/stable/wrappers/fastp.html
 rule fastp_pe:
     input:
-        sample    = [dir_input +  "/rawdata/{sample}_1_sequence.txt.gz", dir_input + "/rawdata/{sample}_2_sequence.txt.gz"],
+        sample    = [dir_input + "/rawdata/{sample}_1_sequence.txt.gz", 
+                     dir_input + "/rawdata/{sample}_2_sequence.txt.gz"],
         fastqc    = rules.fastqc.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
     output:
-        trimmed   = [dir_output + "/processed_data/trimmed/{sample}.1.fastq", dir_output + "/processed_data/trimmed/{sample}.2.fastq"],
+        trimmed   = [dir_output + "/processed_data/trimmed/{sample}.1.fastq", 
+                     dir_output + "/processed_data/trimmed/{sample}.2.fastq"],
         # Unpaired reads separately
         unpaired1 = dir_output + "/processed_data/trimmed/{sample}.u1.fastq",
         unpaired2 = dir_output + "/processed_data/trimmed/{sample}.u2.fastq",
@@ -82,11 +99,15 @@ rule fastp_pe:
     params:
         adapters  = dir_input + "/adapt.fas", 
         extra     = "--merge"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 2000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=60 * attempt)),  
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
     wrapper:
         "v1.19.1/bio/fastp"
-
 
 ####################################################################################################
 
@@ -95,10 +116,12 @@ rule fastp_pe:
 
 rule bbduk_pe:
     input:
-        sample    = [rules.fastp_pe.output.trimmed[0], rules.fastp_pe.output.trimmed[1]],
+        sample    = [dir_output + "/processed_data/trimmed/{sample}.1.fastq", 
+                     dir_output + "/processed_data/trimmed/{sample}.2.fastq"],
         adapters  = dir_input + "/adapt.fas"
     output:
-        trimmed   = [dir_output + "/processed_data/filtered/{sample}.1.fastq", dir_output + "/processed_data/filtered/{sample}.2.fastq"],
+        trimmed   = [dir_output + "/processed_data/filtered/{sample}.1.fastq", 
+                     dir_output + "/processed_data/filtered/{sample}.2.fastq"],
         singleton = dir_output + "/processed_data/filtered/{sample}.single.fastq",
         discarded = dir_output + "/processed_data/filtered/{sample}.discarded.fastq",
         stats     = dir_output + "/processed_data/filtered/{sample}.stats.txt",
@@ -110,6 +133,12 @@ rule bbduk_pe:
         "Running bbduk for sample {wildcards.sample}"
     params:
         extra     = lambda w, input: "ref={},adapters,artifacts ktrim=r k=23 mink=11 hdist=1 tpe tbo trimpolygright=10 minlen=25 maxns=30 entropy=0.5 entropywindow=50 entropyk=5".format(input.adapters),
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 2000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=60 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+
     threads: 
         nThreads
     wrapper:
@@ -121,21 +150,26 @@ rule bbduk_pe:
 
 rule fastqcProcessed:
     input:
-        forwardRead = rules.bbduk_pe.output.trimmed[0],
-        reverseRead = rules.bbduk_pe.output.trimmed[1],
+        forwardRead = dir_output + "/processed_data/filtered/{sample}.1.fastq",
+        reverseRead = dir_output + "/processed_data/filtered/{sample}.2.fastq"
     output:
-        html1       = dir_output + "/qc/fastqc_processed/{sample}_1_sequence_fastqc.html",
-        html2       = dir_output + "/qc/fastqc_processed/{sample}_2_sequence_fastqc.html",
-        zip1        = dir_output + "/qc/fastqc_processed/{sample}_1_sequence_fastqc.zip",
-        zip2        = dir_output + "/qc/fastqc_processed/{sample}_2_sequence_fastqc.zip" 
+        html1       = dir_output + "/qc/fastqc_processed/{sample}.1_fastqc.html",
+        html2       = dir_output + "/qc/fastqc_processed/{sample}.2_fastqc.html",
+        zip1        = dir_output + "/qc/fastqc_processed/{sample}.1_fastqc.zip",
+        zip2        = dir_output + "/qc/fastqc_processed/{sample}.2_fastqc.zip" 
         # the suffix _fastqc.zip is necessary for multiqc to find the file. 
         # If not using multiqc, you are free to choose an arbitrary filename
     params: 
-        outdir      = dir_output  + "/qc/fastqc_processed"
+        outdir      = dir_output + "/qc/fastqc_processed"
     log: 
         dir_output + "/logs/fastqc_processed/{sample}.log"
     message: 
-        "Running fastQC for sample {wildcards.sample}"
+        "Running fastQC after processing for sample {wildcards.sample}"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 2000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=80 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
     conda: 
@@ -154,9 +188,9 @@ rule fastqcProcessed:
 
 rule human_filtering:
     input:
-        fastq1 = rules.bbduk_pe.output.trimmed[0],
-        fastq2 = rules.bbduk_pe.output.trimmed[1],
-        #fastqcProcessed = rules.fastqcProcessed.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
+        fastq1 = dir_output + "/processed_data/filtered/{sample}.1.fastq",
+        fastq2 = dir_output + "/processed_data/filtered/{sample}.2.fastq",
+        fastqcProcessed = rules.fastqcProcessed.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
     output:
         bam    = temp(dir_output + "/processed_data/bam/{sample}_mapped_and_unmapped.bam")
     log:
@@ -165,6 +199,12 @@ rule human_filtering:
         "Running bowtie human mapping for sample {wildcards.sample}"
     params:
        hostDB  = dir_input + "/human_GRCh38/GRCh38_noalt_as"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 20000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=120 * attempt)),        
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+
     threads: 
         nThreads
     conda: 
@@ -183,15 +223,21 @@ rule human_filtering:
 
 rule samtools_view:
     input:
-        bam = rules.human_filtering.output.bam,
+        bam         = rules.human_filtering.output.bam,
     output:
-        unmappedBam  = dir_output + "/processed_data/bam/{sample}.bothReadsUnmapped.bam",
-        idx = dir_output + "/processed_data/bam/{sample}.bai",
+        unmappedBam = dir_output + "/processed_data/bam/{sample}.bothReadsUnmapped.bam",
+        idx         = dir_output + "/processed_data/bam/{sample}.bai"
     log:
-        dir_output + "/logs/samtools/{sample}.log",
+        dir_output + "/logs/samtools/{sample}.log"
+    resources:
+        mem_mb      =lambda wildcards, input, threads, attempt: 2000 * attempt,
+        runtime     =lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=30 * attempt)),
+        slurm_extra ="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+
     params:
-        extra="",  # optional params string
-        region="",  # optional region string
+        slurm_extra ="",  # optional params string
+        region      ="",  # optional region string
     threads: 2
     wrapper:
         "v1.21.0/bio/samtools/view"
@@ -207,10 +253,15 @@ rule samtools_fastq_separate:
         hostremoved1 = dir_output + "/processed_data/bam/{sample}_host_removed_R1.fastq",
         hostremoved2 = dir_output + "/processed_data/bam/{sample}_host_removed_R2.fastq",
     log:
-        dir_output + "/logs/samtools/{sample}.separate.log",
+        dir_output + "/logs/samtools/{sample}.separate.log"
+    resources:
+        mem_mb      =lambda wildcards, input, threads, attempt: 10000 * attempt,
+        runtime     =lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=90 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     params:
         sort="-m 4G",
-        fastq="-n",
+        fastq="-n"
     threads:
         nThreads
     wrapper:
@@ -224,20 +275,25 @@ rule samtools_fastq_separate:
 rule fastqc_hostFil:
     input:
         forwardRead = rules.samtools_fastq_separate.output.hostremoved1,
-        reverseRead = rules.samtools_fastq_separate.output.hostremoved2,
+        reverseRead = rules.samtools_fastq_separate.output.hostremoved2
     output:
-        html1       = dir_output + "/qc/fastqc_hostFil/{sample}_1_sequence_fastqc.html",
-        html2       = dir_output + "/qc/fastqc_hostFil/{sample}_2_sequence_fastqc.html",
-        zip1        = dir_output + "/qc/fastqc_hostFil/{sample}_1_sequence_fastqc.zip",
-        zip2        = dir_output + "/qc/fastqc_hostFil/{sample}_2_sequence_fastqc.zip" 
+        html1       = dir_output + "/qc/fastqc_hostFil/{sample}.1_fastqc.html",
+        html2       = dir_output + "/qc/fastqc_hostFil/{sample}.2_fastqc.html",
+        zip1        = dir_output + "/qc/fastqc_hostFil/{sample}.1_fastqc.zip",
+        zip2        = dir_output + "/qc/fastqc_hostFil/{sample}.2_fastqc.zip" 
         # the suffix _fastqc.zip is necessary for multiqc to find the file. 
         # If not using multiqc, you are free to choose an arbitrary filename
     params: 
-        outdir      = dir_output  + "/qc/fastqc_hostFil"
+        outdir      = dir_output + "/qc/fastqc_hostFil"
     log: 
         dir_output + "/logs/fastqc_hostFil/{sample}.log"
     message: 
-        "Running fastQC for sample {wildcards.sample}"
+        "Running fastQC after host filtering for sample {wildcards.sample}"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 2000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=60 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
     conda: 
@@ -257,12 +313,14 @@ rule motus_taxa:
     input:
         fastq1 = rules.samtools_fastq_separate.output.hostremoved1,
         fastq2 = rules.samtools_fastq_separate.output.hostremoved2,
-        #fastqc_hostFil = rules.fastqc_hostFil.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
+        fastqc_hostFil = rules.fastqc_hostFil.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
 
     output:
-        motus  = dir_output + "/motus_v3.0.1/{sample}.motus",
+        motus  = dir_output + "/motus_v3.0.1/rel/{sample}.rel.motu",
+        motu_c = dir_output + "/motus_v3.0.1/taxa/{sample}.motu",
+        mgc = dir_output + "/motus_v3.0.1/mgc/{sample}.mgc"
     log:
-        dir_output + "/logs/motus_v3/{sample}.motus_v3_taxa.log"
+        dir_output + "/logs/motus_v3.0.1/{sample}.motusV3_profile_taxa.log"
     message:
         "Running motus taxonomic profiling for sample {wildcards.sample}"
     params:
@@ -272,7 +330,12 @@ rule motus_taxa:
         markerGenesCutoff = 3,
         # -l min read lenght
         minReadLength = 75,
-        DBLoc = dir_input 
+        DBLoc = dir_input + "/db_mOTU"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=120 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
     conda: 
@@ -284,28 +347,47 @@ rule motus_taxa:
             -f {input.fastq1} \
             -r {input.fastq2} \
             -o {output.motus} \
-            -M \
-            -db {params.DBLoc} \
+            -M {output.mgc} \
             -l {params.minReadLength} \
             -g {params.markerGenesCutoff} \
-            -n ${wildcards.sample} \
-            -t {threads} &> {log} 
+            -n {wildcards.sample} \
+            -t {threads} \
+            -db {params.DBLoc} &> {log} 
+
+        motus profile \
+            -f {input.fastq1} \
+            -r {input.fastq2} \
+            -o {output.motu_c} \
+            -l {params.minReadLength} \
+            -g {params.markerGenesCutoff} \
+            -n {wildcards.sample} \
+            -t {threads} \
+            -c \
+            -db {params.DBLoc} &> {log} 
         """
 
 ####################################################################################################
 
 # 10. Merge motus files
 rule motus_merge:
-    input:
-        motus        = dir_output + "/motus_v3.0.1/{sample}.motus",
+    input: 
+        allmotu    = expand('{dir}/motus_v3.0.1/taxa/{sample}.motu', 
+        dir = dir_output, sample = allSamplesUnique)
     output:
+        mergedMotu = dir_output + "/motus_v3.0.1/taxa/merged.taxa"
     log:
-        dir_output + "/logs/motus_v3/{sample}.motus_v3_merged.log"
+        dir_output + "/logs/motus_v3.0.1/motus_v3_merged.log"
     message:
         "Running motus merge for samples"
     params:
         # -d Call metaSNV on all bam files in the directory. [Mandatory]
-        dir_merged = dir_output + "/motus_v3.0.1/",
+        dirInput  = dir_output + "/motus_v3.0.1/taxa/",
+        DBLoc = dir_input + "/db_mOTU"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 5000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=60 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
     conda: 
@@ -314,9 +396,10 @@ rule motus_merge:
     # Generating taxonomic profiles
         """
         motus merge \
-            -d motus_v3.0.1/ \
+            -d {params.dirInput} \
             -t {threads} \
-            -o {params.dir_merged} &> {log} 
+            -db {params.DBLoc} \
+            -o {output.mergedMotu} &> {log} 
         """
 
 ####################################################################################################
@@ -327,13 +410,18 @@ rule motus_map_snv:
         fastq1 = rules.samtools_fastq_separate.output.hostremoved1,
         fastq2 = rules.samtools_fastq_separate.output.hostremoved2,
     output:
-        sam    = dir_output + "/motus_v3.0.1/meta_snv/sam/{sample}.sam",
-        #bam    = dir_output + "/motus_v3.0.1/meta_snv/bam/{sample}.bam",
+        bam    = dir_output + "/motus_v3.0.1/snv/bam/{sample}.bam",
     log:
-        dir_output + "/logs/motus_v3/{sample}.motus_v3_map_snv.log"
+        dir_output + "/logs/motus_v3.0.1/{sample}.motus_v3_map_snv.log"
     message:
         "Running motus merge for samples"
     params:
+        DBLoc = dir_input + "/db_mOTU"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=120 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
     conda: 
@@ -347,25 +435,34 @@ rule motus_map_snv:
             -r {input.fastq2} \
             -l 75 \
             -t {threads} \
-            -o {output.sam} 
+            -o {output.bam} \
+            -db {params.DBLoc} &> {log} 
 
-        # samtools view \
-        #     -b {output.sam} - > {output.bam}
         """
-
+ # samtools view \
+        #     -b {output.sam} - > {output.bam}
 ####################################################################################################
 
 # 12. Generating single nucleotide variant (SNV) profiles using MGs 
 rule motus_snv_call:
+    input: 
+        allbam    = expand('{dir}/motus_v3.0.1/snv/bam/{sample}.bam', 
+        dir = dir_output, sample = allSamplesUnique)
     output:
+        motus_snv = directory(dir_output + "/motus_v3.0.1/snv/motus_snv")
     log:
-        dir_output + "/logs/motus_v3/{sample}.motus_v3_snv_call.log"
+        dir_output + "/logs/motus_v3.0.1/motus_v3_snv_call.log"
     message:
         "Running motus merge for samples"
     params:
         # -d Call metaSNV on all bam files in the directory. [Mandatory]
-        motus_snv = dir_output + "/motus_v3.0.1/meta_snv/",
-        bam       = dir_output + "/motus_v3.0.1/meta_snv/bam"
+        bam       = dir_output + "/motus_v3.0.1/snv/bam",
+        DBLoc = dir_input + "/db_mOTU"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=60 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
     conda: 
@@ -375,12 +472,14 @@ rule motus_snv_call:
         # snv_call calls variants using the metaSNV package
         motus snv_call \
             -d {params.bam} \
-            -o {params.motus_snv} &> {log} 
+            -db {params.DBLoc} \
+            -o {output.motus_snv} &> {log} 
         """
 
 
 
-#     # The quality of assembly can be assessed by tools such as MetaQUAST
+# The quality of assembly can be assessed by tools such as MetaQUAST
+        #sam    = dir_output + "/motus_v3.0.1/meta_snv/sam/{sample}.sam",
 
 
 # #Perform optional post-processing with:
