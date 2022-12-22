@@ -1,36 +1,37 @@
-# To run snakemake -s Snakefile --profile profile/config.yaml 
-#Run 'motus downloadDB' before using the motus profiler
+# first source .bashrc
+# To run snakemake -s Snakefile --profile profile/slurm
 
 nThreads   = 8
-
 # import timedelta
 from datetime import timedelta
 
-dir_input  = "/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/input"
-dir_output = "/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/output"
-
 # We need to specify all unique samples here once (later this goes into a config file)
 # Dirty approach here: Use all files from particular directory to colelct sample names
-allSamplesUnique, = glob_wildcards("/Users/ecekartal/Documents/SAEZ/projects/PROMISE_lung_multiomics/input/rawdata/{id}_1_sequence.txt.gz")
+allSamplesUnique, = glob_wildcards(dir_rawdata + "/{id}_1_sequence.txt.gz")
 
 # Append to this list all files you want to have in the end (it is enough to specify the output files from the last rule usually)
 allResultFiles = []
 
-motus = expand('{dir}/motus_v3.0.1/taxa/merged.taxa', 
+motus = expand('{dir}/motus_v3.0.3/taxa/merged.taxa', 
     dir = dir_output, sample = allSamplesUnique)
 allResultFiles.extend(motus)
 
-motus_allBAMs = expand('{dir}/motus_v3.0.1/snv/motus_snv', 
+motus_allBAMs = expand('{dir}/motus_v3.0.3/snv/motus_snv', 
     dir = dir_output, sample = allSamplesUnique)
 allResultFiles.extend(motus_allBAMs)
+
+# multiqc = expand('{dir}/multiqc/multiqc_report.html', 
+#     dir = dir_output, sample = allSamplesUnique)
+# allResultFiles.extend(multiqc)
 
 # Rules that can run locally and do not need a designated cluster submission
 localrules: all
 
 # Update the allResultFiles array if you need additional output files outside of the normal dependency chain
 rule all:
-    input: allResultFiles
-
+    input: 
+        dir_output + '/multiqc/multiqc_report.html'
+        
 ####################################################################################################
 
 # 1. Read QC (FastQC)
@@ -38,8 +39,8 @@ rule all:
 
 rule fastqc:
     input:
-        forwardRead = dir_input + "/rawdata/{sample}_1_sequence.txt.gz",
-        reverseRead = dir_input + "/rawdata/{sample}_2_sequence.txt.gz"
+        forwardRead = dir_rawdata + "/{sample}_1_sequence.txt.gz",
+        reverseRead = dir_rawdata + "/{sample}_2_sequence.txt.gz"
     output:
         html1       = dir_output + "/qc/fastqc/{sample}_1_sequence_fastqc.html",
         html2       = dir_output + "/qc/fastqc/{sample}_2_sequence_fastqc.html",
@@ -56,7 +57,7 @@ rule fastqc:
     threads: 
         nThreads
     conda: 
-        "envs/Preprocess.yaml"
+        "envs/fastqc.yaml"
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 2000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
@@ -77,8 +78,8 @@ rule fastqc:
 # https://snakemake-wrappers.readthedocs.io/en/stable/wrappers/fastp.html
 rule fastp_pe:
     input:
-        sample    = [dir_input + "/rawdata/{sample}_1_sequence.txt.gz", 
-                     dir_input + "/rawdata/{sample}_2_sequence.txt.gz"],
+        sample    = [dir_rawdata + "/{sample}_1_sequence.txt.gz", 
+                     dir_rawdata + "/{sample}_2_sequence.txt.gz"],
         fastqc    = rules.fastqc.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
     output:
         trimmed   = [dir_output + "/processed_data/trimmed/{sample}.1.fastq", 
@@ -127,8 +128,8 @@ rule bbduk_pe:
         stats     = dir_output + "/processed_data/filtered/{sample}.stats.txt",
     log:
          dir_output + "/logs/bbduk_pe/{sample}.log"
-    conda: 
-        "envs/Preprocess.yaml"
+    # conda: 
+    #     "envs/bbmap.yaml"
     message:
         "Running bbduk for sample {wildcards.sample}"
     params:
@@ -138,7 +139,6 @@ rule bbduk_pe:
         runtime=lambda wildcards, input, threads, attempt: str(
             timedelta(minutes=60 * attempt)),
         slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
-
     threads: 
         nThreads
     wrapper:
@@ -173,7 +173,7 @@ rule fastqcProcessed:
     threads: 
         nThreads
     conda: 
-        "envs/Preprocess.yaml"
+        "envs/fastqc.yaml"
     shell:
         """
         fastqc \
@@ -204,11 +204,10 @@ rule human_filtering:
         runtime=lambda wildcards, input, threads, attempt: str(
             timedelta(minutes=120 * attempt)),        
         slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
-
     threads: 
         nThreads
     conda: 
-        "envs/Preprocess.yaml"
+        "envs/bowtie2_samtools.yaml"
     shell:
         """
         bowtie2 \
@@ -234,11 +233,11 @@ rule samtools_view:
         runtime     =lambda wildcards, input, threads, attempt: str(
             timedelta(minutes=30 * attempt)),
         slurm_extra ="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
-
     params:
-        slurm_extra ="",  # optional params string
-        region      ="",  # optional region string
-    threads: 2
+        extra       ="",  # optional params string
+        region      =""  # optional region string
+    threads: 
+        nThreads
     wrapper:
         "v1.21.0/bio/samtools/view"
 
@@ -248,7 +247,7 @@ rule samtools_view:
 
 rule samtools_fastq_separate:
     input:
-        unmappedBam  = dir_output + "/processed_data/bam/{sample}.bothReadsUnmapped.bam",
+        unmappedBam  = rules.human_filtering.output
     output:
         hostremoved1 = dir_output + "/processed_data/bam/{sample}_host_removed_R1.fastq",
         hostremoved2 = dir_output + "/processed_data/bam/{sample}_host_removed_R2.fastq",
@@ -277,10 +276,10 @@ rule fastqc_hostFil:
         forwardRead = rules.samtools_fastq_separate.output.hostremoved1,
         reverseRead = rules.samtools_fastq_separate.output.hostremoved2
     output:
-        html1       = dir_output + "/qc/fastqc_hostFil/{sample}.1_fastqc.html",
-        html2       = dir_output + "/qc/fastqc_hostFil/{sample}.2_fastqc.html",
-        zip1        = dir_output + "/qc/fastqc_hostFil/{sample}.1_fastqc.zip",
-        zip2        = dir_output + "/qc/fastqc_hostFil/{sample}.2_fastqc.zip" 
+        html1       = dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R1_fastqc.html",
+        html2       = dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R2_fastqc.html",
+        zip1        = dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R1_fastqc.zip",
+        zip2        = dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R2_fastqc.zip" 
         # the suffix _fastqc.zip is necessary for multiqc to find the file. 
         # If not using multiqc, you are free to choose an arbitrary filename
     params: 
@@ -297,7 +296,7 @@ rule fastqc_hostFil:
     threads: 
         nThreads
     conda: 
-        "envs/Preprocess.yaml"
+        "envs/fastqc.yaml"
     shell:
         """
         fastqc \
@@ -308,7 +307,7 @@ rule fastqc_hostFil:
 
 ####################################################################################################
 
-# 9. Taxonomic profiling by motus v3.0.1
+# 9. Taxonomic profiling by motus v3.0.3
 rule motus_taxa:
     input:
         fastq1 = rules.samtools_fastq_separate.output.hostremoved1,
@@ -316,11 +315,11 @@ rule motus_taxa:
         fastqc_hostFil = rules.fastqc_hostFil.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
 
     output:
-        motus  = dir_output + "/motus_v3.0.1/rel/{sample}.rel.motu",
-        motu_c = dir_output + "/motus_v3.0.1/taxa/{sample}.motu",
-        mgc = dir_output + "/motus_v3.0.1/mgc/{sample}.mgc"
+        motus  = dir_output + "/motus_v3.0.3/rel/{sample}.rel.motu",
+        motu_c = dir_output + "/motus_v3.0.3/taxa/{sample}.motu",
+        mgc = dir_output + "/motus_v3.0.3/mgc/{sample}.mgc"
     log:
-        dir_output + "/logs/motus_v3.0.1/{sample}.motusV3_profile_taxa.log"
+        dir_output + "/logs/motus_v3.0.3/{sample}.motusV3_profile_taxa.log"
     message:
         "Running motus taxonomic profiling for sample {wildcards.sample}"
     params:
@@ -339,7 +338,7 @@ rule motus_taxa:
     threads: 
         nThreads
     conda: 
-       "envs/Preprocess.yaml"
+       "envs/motus.yaml"
     shell:
     # Generating taxonomic profiles
         """
@@ -371,17 +370,17 @@ rule motus_taxa:
 # 10. Merge motus files
 rule motus_merge:
     input: 
-        allmotu    = expand('{dir}/motus_v3.0.1/taxa/{sample}.motu', 
+        allmotu    = expand('{dir}/motus_v3.0.3/taxa/{sample}.motu', 
         dir = dir_output, sample = allSamplesUnique)
     output:
-        mergedMotu = dir_output + "/motus_v3.0.1/taxa/merged.taxa"
+        mergedMotu = dir_output + "/motus_v3.0.3/taxa/merged.taxa"
     log:
-        dir_output + "/logs/motus_v3.0.1/motus_v3_merged.log"
+        dir_output + "/logs/motus_v3.0.3/motus_v3_merged.log"
     message:
         "Running motus merge for samples"
     params:
         # -d Call metaSNV on all bam files in the directory. [Mandatory]
-        dirInput  = dir_output + "/motus_v3.0.1/taxa/",
+        dirInput  = dir_output + "/motus_v3.0.3/taxa/",
         DBLoc = dir_input + "/db_mOTU"
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 5000 * attempt,
@@ -391,7 +390,7 @@ rule motus_merge:
     threads: 
         nThreads
     conda: 
-       "envs/Preprocess.yaml"
+       "envs/motus.yaml"
     shell:
     # Generating taxonomic profiles
         """
@@ -399,7 +398,7 @@ rule motus_merge:
             -d {params.dirInput} \
             -t {threads} \
             -db {params.DBLoc} \
-            -o {output.mergedMotu} &> {log} 
+            -o {output.mergedMotu} 
         """
 
 ####################################################################################################
@@ -410,11 +409,11 @@ rule motus_map_snv:
         fastq1 = rules.samtools_fastq_separate.output.hostremoved1,
         fastq2 = rules.samtools_fastq_separate.output.hostremoved2,
     output:
-        bam    = dir_output + "/motus_v3.0.1/snv/bam/{sample}.bam",
+        bam    = dir_output + "/motus_v3.0.3/snv/bam/{sample}.bam",
     log:
-        dir_output + "/logs/motus_v3.0.1/{sample}.motus_v3_map_snv.log"
+        dir_output + "/logs/motus_v3.0.3/{sample}.motus_v3_map_snv.log"
     message:
-        "Running motus merge for samples"
+        "Running motus map snv for sample {wildcards.sample}"
     params:
         DBLoc = dir_input + "/db_mOTU"
     resources:
@@ -425,7 +424,7 @@ rule motus_map_snv:
     threads: 
         nThreads
     conda: 
-       "envs/Preprocess.yaml"
+       "envs/motus.yaml"
     shell:
         """
         # Generating single nucleotide variant (SNV) profiles using MGs
@@ -439,24 +438,23 @@ rule motus_map_snv:
             -db {params.DBLoc} &> {log} 
 
         """
- # samtools view \
-        #     -b {output.sam} - > {output.bam}
-####################################################################################################
+ 
+ ####################################################################################################
 
 # 12. Generating single nucleotide variant (SNV) profiles using MGs 
 rule motus_snv_call:
     input: 
-        allbam    = expand('{dir}/motus_v3.0.1/snv/bam/{sample}.bam', 
+        allbam    = expand('{dir}/motus_v3.0.3/snv/bam/{sample}.bam', 
         dir = dir_output, sample = allSamplesUnique)
     output:
-        motus_snv = directory(dir_output + "/motus_v3.0.1/snv/motus_snv")
+        motus_snv = directory(dir_output + "/motus_v3.0.3/snv/motus_snv")
     log:
-        dir_output + "/logs/motus_v3.0.1/motus_v3_snv_call.log"
+        dir_output + "/logs/motus_v3.0.3/motus_v3_snv_call.log"
     message:
-        "Running motus merge for samples"
+        "Running motus merge snv for samples"
     params:
         # -d Call metaSNV on all bam files in the directory. [Mandatory]
-        bam       = dir_output + "/motus_v3.0.1/snv/bam",
+        bam       = dir_output + "/motus_v3.0.3/snv/bam",
         DBLoc = dir_input + "/db_mOTU"
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
@@ -466,22 +464,49 @@ rule motus_snv_call:
     threads: 
         nThreads
     conda: 
-       "envs/Preprocess.yaml"
+       "envs/motus.yaml"
     shell:
         """
         # snv_call calls variants using the metaSNV package
         motus snv_call \
             -d {params.bam} \
             -db {params.DBLoc} \
-            -o {output.motus_snv} &> {log} 
+            -o {output.motus_snv} 
         """
+
+####################################################################################################
+
+# 13. Run multiqc for having an overview
+
+# rule multiqc:
+#     input:
+#         allResultFiles  # Enforce that it runs at the very end, put the array here that you also use for the first all rule
+#     output:
+#         report = dir_output + '/multiqc/multiqc_report.html'
+#     log:
+#     message: "Finally, run multiqc"
+#     threads: 1
+#     params:
+#         outputDir = lambda wildcards, output: os.path.dirname(output.report),
+#         basename  = lambda wildcards, output: os.path.basename(output.report),
+#         rootDir   = dir_output # replace with the output directory of your pipeline that contains all log files, faatqc files etc
+#     conda: 
+#         "envs/multiqc.yaml"
+#     shell:
+#         """
+#             multiqc \
+#                 --force  \
+#                 --ignore *.out --ignore *.err \
+#                 -o {params.outputDir}  \
+#                 --filename {params.basename}  \
+#                 {params.rootDir}
+#         """
+
 
 
 
 # The quality of assembly can be assessed by tools such as MetaQUAST
         #sam    = dir_output + "/motus_v3.0.1/meta_snv/sam/{sample}.sam",
-
-
 # #Perform optional post-processing with:
 # #bracken
 # #Standardises output tables

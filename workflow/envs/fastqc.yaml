@@ -1,0 +1,10 @@
+name: fastqc
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+  - nodefaults
+dependencies:
+  - fastqc
+
+ 

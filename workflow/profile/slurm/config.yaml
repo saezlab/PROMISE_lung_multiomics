@@ -1,19 +1,18 @@
-name: Slurm_conda
 cores: 8
 local-cores: 1
-#printshellcmds: True
-show-failed-logs: True
+printshellcmds: True
+show-failed-logs: False
 use-singularity: False
 #singularity-args: "--bind /g/boulard/ --bind /scratch/tabaro"
 use-conda: True
 rerun-incomplete: True
-jobs: 50
+jobs: 100
 latency-wait: 300
 slurm: True
 restart-times: 2
-
+keep-going: True
 default-resources:
-    - "slurm_account=bq_kece"
+    - "slurm_account=ag-saez"
     - "slurm_partition=single"
 
 # Command line call: --profile profile/config.yaml 

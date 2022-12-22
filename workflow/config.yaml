@@ -1,0 +1,84 @@
+##################################################
+##################################################
+# CONFIGURATION FILE FOR PROMISE LUNG MICROBIOME #
+##################################################
+##################################################
+
+
+# This format allows comments and is therefore easier to work with
+# Quotation marks are optional for strings. Make sure to put ": " (that is, hyphen space) as separator
+
+threads: 8
+
+input:
+  # fastqc files
+  dir_rawdata: "/net/data.isilon/ag-saez/bq_shared/promise_lung_microbiome_raw"
+  # input folder for all the other databases
+  dir_input  : "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input"
+  # adapter sequence file for adapter trimming
+  adapters   : "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/adapt.fas"
+
+output:
+  # STRING. Absolute path to the output directory. Will be created if not yet present.
+  dir_output : "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/output"
+
+samples:
+  # unique sample IDs
+  allSamplesUnique: "/net/data.isilon/ag-saez/bq_shared/promise_lung_microbiome_raw/{id}_1_sequence.txt.gz"
+
+host_DB:
+  # motu database
+  hostDB: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/human_GRCh38/GRCh38_noalt_as"
+
+samtools:
+  sort: "-m 4G"
+  fastq: "-n"
+
+motus:
+  # motu database
+  DBLoc: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/human_GRCh38/GRCh38_noalt_as"
+  # -n for output sample name
+  # -M  save the marker gene cluster (MGC) counts
+  # -g marker genes cutoff
+  markerGenesCutoff: 3
+  # -l min read lenght
+  minReadLength: 75
+  # motu database
+  db: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/human_GRCh38/GRCh38_noalt_as"
+  bam: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/output/motus_v3.0.3/snv/bam"
+
+
+####################################################
+# test and verify that all required parameters have been provided
+# if not, an informative error message is thrown and the Snakefile stops.
+configDict = {
+            "output":
+                ["dir_output"],
+            "samples":
+                ["allSamplesUnique"],
+            "host_DB":
+                ["host_DB"],
+            "samtools":
+                ["sort", "fastq"],
+            "motus":
+                ["DBLoc", "markerGenesCutoff", "minReadLength", "db", "bam"]
+            }
+
+
+for sectionCur in configDict:
+    if not sectionCur in config:
+        raise KeyError("Could not find section \"" + sectionCur + "\" in the config file or no config file has been specified.")
+
+    requiredPar = configDict[sectionCur]
+
+    for parCur in requiredPar:
+        if not parCur in config[sectionCur]:
+            missingParameters.append(parCur)
+
+   
+    if len(missingParameters) > 0:
+        missingParStr = ",".join(missingParameters)
+        raise KeyError("Could not find parameter(s) \"" + missingParStr + "\" in section \"" + sectionCur + "\" in the config file.")
+
+
+
