@@ -4,6 +4,9 @@
 nThreads   = 8
 # import timedelta
 from datetime import timedelta
+dir_rawdata  = "/net/data.isilon/ag-saez/bq_shared/promise_lung_microbiome_raw"
+dir_input  = "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input"
+dir_output = "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/output"
 
 # We need to specify all unique samples here once (later this goes into a config file)
 # Dirty approach here: Use all files from particular directory to colelct sample names
@@ -82,15 +85,15 @@ rule fastp_pe:
                      dir_rawdata + "/{sample}_2_sequence.txt.gz"],
         fastqc    = rules.fastqc.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
     output:
-        trimmed   = [dir_output + "/processed_data/trimmed/{sample}.1.fastq", 
-                     dir_output + "/processed_data/trimmed/{sample}.2.fastq"],
+        trimmed   = [dir_output + "/processed_data/trimmed/{sample}.1.fastq.gz", 
+                     dir_output + "/processed_data/trimmed/{sample}.2.fastq.gz"],
         # Unpaired reads separately
-        unpaired1 = dir_output + "/processed_data/trimmed/{sample}.u1.fastq",
-        unpaired2 = dir_output + "/processed_data/trimmed/{sample}.u2.fastq",
+        #unpaired1 = dir_output + "/processed_data/trimmed/{sample}.u1.fastq",
+        #unpaired2 = dir_output + "/processed_data/trimmed/{sample}.u2.fastq",
         # or in a single file
         # unpaired="trimmed/pe/{sample}.singletons.fastq",
-        merged    = dir_output + "/processed_data/trimmed/{sample}.merged.fastq",
-        failed    = dir_output + "/processed_data/trimmed/{sample}.failed.fastq",
+        #merged    = dir_output + "/processed_data/trimmed/{sample}.merged.fastq",
+        #failed    = dir_output + "/processed_data/trimmed/{sample}.failed.fastq",
         html      = dir_output + "/report/{sample}.html",
         json      = dir_output + "/report/{sample}.json"
     message:
@@ -99,7 +102,7 @@ rule fastp_pe:
         dir_output + "/logs/fastp/{sample}.log"
     params:
         adapters  = dir_input + "/adapt.fas", 
-        extra     = "--merge"
+        extra     = "--merge --qualified_quality_phred 4"
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 2000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
@@ -117,14 +120,14 @@ rule fastp_pe:
 
 rule bbduk_pe:
     input:
-        sample    = [dir_output + "/processed_data/trimmed/{sample}.1.fastq", 
-                     dir_output + "/processed_data/trimmed/{sample}.2.fastq"],
+        sample    = [dir_output + "/processed_data/trimmed/{sample}.1.fastq.gz", 
+                     dir_output + "/processed_data/trimmed/{sample}.2.fastq.gz"],
         adapters  = dir_input + "/adapt.fas"
     output:
-        trimmed   = [dir_output + "/processed_data/filtered/{sample}.1.fastq", 
-                     dir_output + "/processed_data/filtered/{sample}.2.fastq"],
-        singleton = dir_output + "/processed_data/filtered/{sample}.single.fastq",
-        discarded = dir_output + "/processed_data/filtered/{sample}.discarded.fastq",
+        trimmed   = [dir_output + "/processed_data/filtered/{sample}.1.fastq.gz", 
+                     dir_output + "/processed_data/filtered/{sample}.2.fastq.gz"],
+        singleton = dir_output + "/processed_data/filtered/{sample}.single.fastq.gz",
+        discarded = dir_output + "/processed_data/filtered/{sample}.discarded.fastq.gz",
         stats     = dir_output + "/processed_data/filtered/{sample}.stats.txt",
     log:
          dir_output + "/logs/bbduk_pe/{sample}.log"
@@ -150,8 +153,8 @@ rule bbduk_pe:
 
 rule fastqcProcessed:
     input:
-        forwardRead = dir_output + "/processed_data/filtered/{sample}.1.fastq",
-        reverseRead = dir_output + "/processed_data/filtered/{sample}.2.fastq"
+        forwardRead = dir_output + "/processed_data/filtered/{sample}.1.fastq.gz",
+        reverseRead = dir_output + "/processed_data/filtered/{sample}.2.fastq.gz"
     output:
         html1       = dir_output + "/qc/fastqc_processed/{sample}.1_fastqc.html",
         html2       = dir_output + "/qc/fastqc_processed/{sample}.2_fastqc.html",
@@ -188,8 +191,8 @@ rule fastqcProcessed:
 
 rule human_filtering:
     input:
-        fastq1 = dir_output + "/processed_data/filtered/{sample}.1.fastq",
-        fastq2 = dir_output + "/processed_data/filtered/{sample}.2.fastq",
+        fastq1 = dir_output + "/processed_data/filtered/{sample}.1.fastq.gz",
+        fastq2 = dir_output + "/processed_data/filtered/{sample}.2.fastq.gz",
         fastqcProcessed = rules.fastqcProcessed.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
     output:
         bam    = temp(dir_output + "/processed_data/bam/{sample}_mapped_and_unmapped.bam")
@@ -234,7 +237,7 @@ rule samtools_view:
             timedelta(minutes=30 * attempt)),
         slurm_extra ="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     params:
-        extra       ="",  # optional params string
+        extra       ="-f 12 -F 256",  # optional params string
         region      =""  # optional region string
     threads: 
         nThreads
@@ -247,10 +250,10 @@ rule samtools_view:
 
 rule samtools_fastq_separate:
     input:
-        unmappedBam  = rules.human_filtering.output
+        unmappedBam  = rules.samtools_view.output.unmappedBam
     output:
-        hostremoved1 = dir_output + "/processed_data/bam/{sample}_host_removed_R1.fastq",
-        hostremoved2 = dir_output + "/processed_data/bam/{sample}_host_removed_R2.fastq",
+        hostremoved1 = dir_output + "/processed_data/bam/{sample}_host_removed_R1.fastq.gz",
+        hostremoved2 = dir_output + "/processed_data/bam/{sample}_host_removed_R2.fastq.gz",
     log:
         dir_output + "/logs/samtools/{sample}.separate.log"
     resources:
@@ -333,7 +336,7 @@ rule motus_taxa:
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
-            timedelta(minutes=120 * attempt)),
+            timedelta(minutes=150 * attempt)),
         slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
@@ -385,7 +388,7 @@ rule motus_merge:
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 5000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
-            timedelta(minutes=60 * attempt)),
+            timedelta(minutes=90 * attempt)),
         slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
@@ -419,7 +422,7 @@ rule motus_map_snv:
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
-            timedelta(minutes=120 * attempt)),
+            timedelta(minutes=200 * attempt)),
         slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
@@ -459,7 +462,7 @@ rule motus_snv_call:
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
-            timedelta(minutes=60 * attempt)),
+            timedelta(minutes=200 * attempt)),
         slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
     threads: 
         nThreads
@@ -478,29 +481,35 @@ rule motus_snv_call:
 
 # 13. Run multiqc for having an overview
 
-# rule multiqc:
-#     input:
-#         allResultFiles  # Enforce that it runs at the very end, put the array here that you also use for the first all rule
-#     output:
-#         report = dir_output + '/multiqc/multiqc_report.html'
-#     log:
-#     message: "Finally, run multiqc"
-#     threads: 1
-#     params:
-#         outputDir = lambda wildcards, output: os.path.dirname(output.report),
-#         basename  = lambda wildcards, output: os.path.basename(output.report),
-#         rootDir   = dir_output # replace with the output directory of your pipeline that contains all log files, faatqc files etc
-#     conda: 
-#         "envs/multiqc.yaml"
-#     shell:
-#         """
-#             multiqc \
-#                 --force  \
-#                 --ignore *.out --ignore *.err \
-#                 -o {params.outputDir}  \
-#                 --filename {params.basename}  \
-#                 {params.rootDir}
-#         """
+rule multiqc:
+    input:
+        allResultFiles  # Enforce that it runs at the very end, put the array here that you also use for the first all rule
+    output:
+        report = dir_output + '/multiqc/multiqc_report.html'
+    log:
+    message: "Finally, run multiqc"
+    threads: 1
+    params:
+        outputDir = lambda wildcards, output: os.path.dirname(output.report),
+        basename  = lambda wildcards, output: os.path.basename(output.report),
+        rootDir   = dir_output # replace with the output directory of your pipeline that contains all log files, faatqc files etc
+    conda: 
+        "envs/multiqc.yaml"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=100 * attempt)),
+        slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+
+    shell:
+        """
+            multiqc \
+                --force  \
+                --ignore *.out --ignore *.err \
+                -o {params.outputDir}  \
+                --filename {params.basename}  \
+                {params.rootDir}
+        """
 
 
 
