@@ -1,0 +1,529 @@
+---
+title: "PRedictive immunOlogical sIgnatureS in lung cancer (Promise) Trial Report"
+author: "Ece Kartal"
+date: "25.12.2022"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+set.seed(1897)
+
+# load library
+library(gtools)
+library(readr)
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(car)
+library(vegan)
+#library(Rarefy)
+
+# Set parameters
+PARAM <- list()
+PARAM$folder.R <- paste0(getwd(), "/")
+PARAM$folder <- gsub("src/", "", PARAM$folder.R)
+PARAM$folder.input <- paste0(PARAM$folder, "input/")
+PARAM$folder.Rdata <- paste0(PARAM$folder, "output/Rdata/")
+PARAM$folder.data <- paste0(PARAM$folder, "data/")
+PARAM$folder.output <- paste0(PARAM$folder, "output/")
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+# load metadata 
+library(readxl)
+meta <- read_excel(paste0(PARAM$folder.input,
+                          "metadata/220819 Sample_submission_PROMISE_Metagenomics_NCT_EMBL_v3.xlsx"))
+rownames(meta) <- meta$`Fallnummer / SampleID`
+meta$ID <- meta$`Fallnummer / SampleID`
+
+# load taxonomy
+taxa <- read.csv(paste0(PARAM$folder.input, "/db_mOTU/db_mOTU_taxonomy_ref-mOTUs.tsv"),  
+                 sep = "\t", 
+                 row.names = 1)
+```
+
+################################################################################
+## Introduction
+################################################################################
+
+Lung cancer is a leading cause of cancer-related deaths worldwide with limited treatment options and poor prognosis. The microbiome has been shown to play a role in lung cancer development and progression. Studies have shown that the microbiome is altered in lung cancer patients compared to healthy individuals. However, the exact role of the microbiome in lung cancer is not fully understood and more research is needed.
+
+The goal of this project is to identify a microbial biomarker signature that can predict whether a patient with Non-Small Cell Lung Cancer (NSCLC) will respond to or resist treatment. Specifically, we aim to identify specific microbial communities or patterns in the microbiome that may be associated with treatment response or resistance in this subset of lung cancer patients over time. 
+
+By analyzing the microbial communities present in fecal samples from individuals with NSCLC, we aim to identify specific taxa and pathways that are associated with treatment response. Our findings will provide insight into the role of the microbiome as a potential biomarker in the diagnosis and treatment of lung cancer, and may lead to the development of targeted therapies based on the individual's microbiome profile.
+
+################################################################################
+## Data analysis pipeline
+################################################################################
+
+We used shotgun metagenomics sequencing to analyze the bacterial communities present in fecal samples from these individuals and use statistical and bioinformatic approaches to identify microbial taxa that are differentially abundant in individuals with lung cancer. 
+
+The Snakemake pipeline, to process shotgun metagenomics data, consisted of several steps, including quality control, annotation, and functional analysis: 
+
+* First, we performed quality control using FastQC to identify any potential issues with the raw sequencing data. Next, we used fastp to perform adapter clipping and merging on the data. We also applied low complexity and quality filtering using Bbduk(Bbmap).
+
+* To further filter the data, we used Bowtie2 to align the reads to a reference genome of the host species (hg19). The output of this step was a single BAM file containing both aligned and unaligned reads. We then used samtools view to filter the BAM file, retaining only the reads that were not aligned to the host genome.
+
+* Next, we used samtools fastq to convert the filtered BAM file back into two separate FASTQ files for the forward and reverse reads. These FASTQ files contained reads that had been filtered for alignment to the host genome and were used for downstream analysis.
+
+* Finally, for taxonomic profiling, we used motus v3.0.3 to process the forward and reverse FASTQ files and a database of marker genes. This step generated a set of two files: a relative abundance file and a taxa file. The relative abundance file contained the relative abundance of each microbe (defined as a microbial operational taxonomic unit or MOTU) in the sample, while the taxa file contained the taxonomic classification of each MOTU.
+
+* In addition to taxonomic annotation, we used MOTUs to perform functional analysis by generating single nucleotide variant (SNV) profiles. These profiles provided insights into the genetic diversity within the microbial community and helped identify functionally important genetic changes.
+
+################################################################################
+## Results
+################################################################################
+
+In this pilot dataset, I analyzed 48 fecal shotgun samples from NSCLC cancer patients. The total read count in these samples ranged from 6 million to 50 million, with 5 samples having fewer than 10 million reads. The overall host DNA contamination and low quality reads were less than 1%. 
+
+```{r loadData and clean, message=FALSE, warning=FALSE, echo=FALSE}
+# load motu files
+motu.abs <- read.csv(paste0(PARAM$folder.output, "/motus_v3.0.3/taxa/merged.taxa"),  
+                     sep = "\t", 
+                     skip = 2, 
+                     row.names = 1)
+nsamples=ncol(motu.abs)
+# fix the sample names
+namesTemp <- stringr::str_split_fixed(colnames(motu.abs), pattern = "_", 4)[,2:3]
+namesTemp <- paste0(namesTemp[,1], "_", namesTemp[,2])
+namesTempv <- stringr::str_split_fixed(namesTemp, pattern = "_22s00", 2)
+colnames(motu.abs) <- namesTempv[,1]
+data.sample.tmp <- unique(subset(meta, meta$`Fallnummer / SampleID` %in% colnames(motu.abs)))
+
+# rownames(data.motu) <- str_replace_all(rownames(data.motu), 
+#                                     c("ef_mOTU_v25" = "", 
+#                                       "incertae sedis" = "", 
+#                                       "eta_mOTU_v25" = ""))
+
+# remove unmapped
+# data.motu <- data.motu[!rownames(data.motu) %in% c("-1"), ]
+# return(data.motu)
+# }
+
+# remove low prevelant and abundant taxa
+motu.abs.f <- motu.abs[rowSums(motu.abs > 0) >= 1, colSums(motu.abs) >= 500]
+
+# relative abundance
+motu.rel <- prop.table(as.matrix(motu.abs), 2)
+```
+
+```{r split metadata, warning=FALSE, echo=FALSE}
+# # prepare metag
+# # remove unnecessary or NA columns from metadata
+# idx = c("environment_material", "subject_disease_status",  "CA19", "stage")
+# 
+# temp <- as.data.frame(subset(metag, select= idx))
+# 
+# metadata.g= unique(subset(temp, rownames(temp) %in% colnames(motu.abs.2mg)))
+# # subset metadata
+# a=rownames(metadata.g)
+# metadata.g <- metadata.g %>%  
+#   mutate(metformin=dplyr::recode(metformin_med,
+#                                      'no diabetes'=0))
+# meta.total = metadata.g
+# 
+# #metadata.g <- complete.cases(metadata.g)# subset metadata
+# meta.or = subset(metadata.g, 
+#                  metadata.g$environment_material=="saliva [ENVO:02000036]")
+```
+
+```{r, echo=FALSE}
+# subset otu 
+feat.total <- motu.rel[, match(rownames(meta),colnames(motu.rel))]
+dim(feat.total)
+```
+
+```{r readcount_plot, message=FALSE, fig.width=8, fig.height=7, echo= FALSE}
+ggplot(meta, aes(y=total_reads, 
+                 x= `Fallnummer / SampleID`,
+                 fill=as.factor(Timepoint))) + 
+  geom_bar(stat="identity", alpha=0.5) +
+  scale_color_manual(name = "Timepoint", values=c("#999999","#56B4E9", "#E69F00")) +
+  scale_fill_manual(name = "Timepoint", values=c("#999999","#56B4E9", "#E69F00")) +
+  xlab("Samples") +  
+  ylab("# of Reads (Million)") +
+  ggtitle("Total read counts/sample") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), legend.position = "bottom")
+```
+
+**Figure 1.** Total read count per sample
+
+```{r save files, message=FALSE, echo=FALSE}
+# Save Rdata
+save(motu.abs, motu.rel,meta, motu.abs.f, taxa, 
+     file=paste0(PARAM$folder.Rdata, "metag.motus.v3.Rdata"))
+```
+
+################################################################################
+### Diversity Analysis
+################################################################################
+
+Diversity in the ecological sense is intuitively understood as the complexity of a community of organisms.The two main categories of methods are known as **alpha diversity** and **beta diversity** 
+
+#### Rarefaction
+
+Rarefaction is used to standardize the number of samples (i.e. reads) across different datasets. This is important when comparing the diversity of samples because it helps to account for differences in sequencing depth. By using this technique to rarefy to a constant depth, we can ensure that the samples are being compared fairly and that any differences in species detection are not simply due to differences in sequencing depth. This allows for a more accurate comparison of the diversity or similarity of the samples.
+
+When we use rarefied reads, the species detection tends to be lower because we are only considering a subset of the total reads. However, this can be useful for comparing the diversity or similarity of samples because it helps to account for differences in sequencing depth. Due to this reason, I use several diversity measurements to have a consensus. 
+
+```{r rarefaction, echo=FALSE}
+# transform count matrix
+motu.t = t(motu.abs.f)
+
+shared= motu.t %>% 
+  as_tibble(rownames="ID") %>%  
+  pivot_longer(-ID)
+
+# rarefy based on minimum number of reads
+min_seq = min(rowSums(motu.t))
+
+# plot rarefaction curves
+rarecurve.data <- rarecurve(motu.t, step = 50, sample = min_seq)
+```
+
+**Figure 2.** Total marker gene read counts per sample. 
+
+
+################################################################################
+### Alpha (within sample) Diversity Analysis
+################################################################################
+
+Alpha diversity measures the diversity within a single sample and is generally based on the number and relative abundance of taxa at some rank
+**Shannon**: How difficult it is to predict the identity of a randomly chosen individual.
+**Simpson**: The probability that two randomly chosen individuals are the same species.
+**Inverse Simpson**: This is a bit confusing to think about. Assuming a theoretically community where all species were equally abundant, this would be the number of species needed to have the same Simpson index value for the community being analyzed.
+
+The `diversity` function from the vegan package can be used to calculate the alpha diversity of a set of samples. 
+
+```{r message=FALSE, echo=FALSE}
+alpha.div <- shared %>%
+  dplyr::group_by(ID) %>%
+  dplyr::summarize(richness = specnumber(value),
+            shannon = diversity(value, index="shannon"),
+            simpson = diversity(value, index="simpson"),
+            invsimpson = 1/simpson,
+            n = sum(value)) %>%
+  pivot_longer(cols=c(richness, shannon, invsimpson, simpson), names_to="metric")
+
+# add status info
+alpha.div.com <- left_join(alpha.div, meta, by="ID", all.x=TRUE)
+```
+
+```{r plotAlpha, echo=FALSE}
+# lets compare the indices based on a scatter-plot.
+alpha.div.com %>%
+  ggplot(aes(x=n, y=value)) +
+  geom_point() +
+  geom_smooth(method=lm) +
+  facet_wrap(~metric, nrow=2, scales="free_y")
+
+# to compare indices between different patient status, boxplot is suitable
+p.alpha <- alpha.div.com %>%
+  ggplot( aes(x=metric, y=value)) + 
+  geom_boxplot() + 
+  #stat_compare_means() + # wilcox.test p-value
+  facet_wrap(. ~ metric, scale="free") +
+  theme_classic()
+
+#p.alpha
+# save plot
+ggsave(p.alpha, filename=paste0(PARAM$folder.output, "alpha.div.nonrar.pdf"))
+```
+
+**Figure 3.** Comparison of alpha diversity measurements with read counts. 
+
+As we can see, a higher read count increases the likelihood of detecting a greater diversity of species in the sample (richness).  
+
+We will use `rrarefy` function from vegan package for rarefaction
+
+```{r, echo=FALSE}
+# transform, rarefy
+feat.rare <- rrarefy(motu.t, min_seq)
+feat.rare <- t(as.data.frame(feat.rare))
+```
+
+```{r calculateRarefiedAlpha, echo=FALSE}
+shared= t(feat.rare) %>% as_tibble(rownames="ID") %>% pivot_longer(-ID)
+
+alpha.div.r <- shared %>%
+  dplyr::group_by(ID) %>%
+  dplyr::summarize(richness = specnumber(value),
+            shannon = diversity(value, index="shannon"),
+            simpson = diversity(value, index="simpson"),
+            invsimpson = 1/simpson,
+            n = sum(value)) %>%
+  pivot_longer(cols=c(richness, shannon, invsimpson, simpson), 
+               names_to="metric")
+
+# add status info
+alpha.div.rar <- left_join(alpha.div.r, meta, by="ID", all.x=TRUE)
+```
+
+In general, you will see roughly normal distribution for Shannon’s diversity as well as most richness metrics. Simpson’s diversity, on the other hand, is usually skewed. So most will use inverse Simpson (1/Simpson) instead. This not only increases normalcy but also makes the output more logical as a higher inverse Simpson value corresponds to higher diversity.
+
+```{r plotAlpharar, fig.width=6, fig.height=6, echo=FALSE}
+# lets compare the indices based on a scatter-plot.
+p.alpha.rar <- alpha.div.r %>%
+  ggplot( aes(x=metric, y=value)) + 
+  geom_boxplot() + 
+  #stat_compare_means() + 
+  facet_wrap(. ~ metric, scale="free") +
+  theme_classic()
+
+# save plot
+ggsave(p.alpha, filename=paste0(PARAM$folder.output, "alpha.div.rar.pdf"))
+```
+
+```{r fig.width=8, fig.height=4, echo=FALSE}
+# print both plots
+figure.alpha <- ggarrange(p.alpha, p.alpha.rar,
+                    labels = c("A.", "B."),
+                    ncol = 2, nrow = 1)
+figure.alpha
+```
+
+**Figure 4.** Comparison of alpha diversity measurements between non-rarefied and rarefied reads. 
+
+As seen in the figure, when we rarefy samples, we loose a lot of low abundant species, that would change the diversity measurements. 
+
+```{r, echo=FALSE}
+# Do ANOVA
+# metatest = c("smoking", "status","diabetes", "center", "gender", "status",
+#              "antibiotic", "periodontitis", "age")
+# 
+# alpha.div.anova <- alpha.div.com %>%
+#   pivot_wider(names_from = metric, values_from = value)
+#   
+# collect.confounders <- data.frame()
+# 
+# for (metavar in metatest) {
+# # calculate anova for stool 
+# lm <- lm(substitute(richness~ as.factor(metavar), 
+#                     list(metavar = as.name(metavar))),
+#          data = alpha.div.anova, na.action=na.omit)
+# 
+# aov <- Anova(lm) %>% broom::tidy() %>% 
+#   mutate(metric="richness")
+#   aov <- aov[1,]
+#   aov$term <- metavar
+#   
+#   # collect data
+#   collect.confounders <- rbind(collect.confounders, aov)
+# }
+# 
+# # fdr correction
+# collect.confounders$p.adj <- p.adjust(collect.confounders$p.value)
+# 
+# # Lets have a look to results
+# collect.confounders
+```
+
+################################################################################
+### Beta (between sample) Diversity Analysis
+################################################################################
+
+Beta diversity is a way to quantify the difference between two communities. There are many metrics that are used for this, but we will only mention a few of the more popular ones. 
+
+- Indexes used with presence/absence data:
+*Jaccard*: the number of species common to both communities divided by the number of species in either community.
+*Unifrac*: The fraction of the phylogenetic tree branch lengths shared by the two communities.
+
+- Indexes used with count data:
+*Bray–Curtis*: The sum of lesser counts for species present in both communities divided by the sum of all counts in both communities. This can be thought of as a quantitative version of the Sørensen index.
+*Weighted Unifrac*: The fraction of the phylogenetic tree branch lengths shared by the two communities, weighted by the counts of organisms, so more abundant organisms have a greater influence.
+
+The vegan function `vegdist` is used to compute dissimilarity indexes. **Bray-Curtis** takes into account species presence/absence, as well as abundance, whereas other measures (like Jaccard) only take into account presence/absence and UniFrac incorporates phylogenetic information. Due to this reason, I used the Bray-Curtis metric in this analysis
+
+```{r betanonRarefied, echo=FALSE, warning=FALSE, message=FALSE}
+# remove zymo pos contr
+
+# calculate not rarefied beta diversity
+beta_dist <- vegan::vegdist(t(motu.abs.f), index = "bray")
+```
+
+```{r NMDSnonRarefied, echo=FALSE, warning=FALSE, message=FALSE}
+nmds <- metaMDS(beta_dist) %>% scores(display=c("sites")) %>% as_tibble(rownames="ID")
+# combine metadata and betadiv
+meta_nmds <- dplyr::inner_join(meta, nmds)
+```
+
+```{r plotBeta, echo=FALSE}
+p.betadiv.ord <- ggplot(meta_nmds, aes(x = NMDS1, y = NMDS2, color = Timepoint)) +
+  geom_point(show.legend = FALSE) +
+  scale_color_manual(values=c("#E69F00", "#56B4E9")) +
+  stat_ellipse() +
+  theme(legend.position="bottom") 
+
+```
+
+#### Calculating Rarefied Beta Diversity
+
+`avgdist` function computes the dissimilarity matrix of a dataset multiple times using `vegdist` while randomly subsampling the dataset each time. All of the subsampled iterations are then averaged (mean) to provide a distance matrix that represents the average of multiple subsampling iterations.
+
+```{r betaRarefied, echo=FALSE, warning=FALSE, message=FALSE}
+# calculate rarefied beta diversity
+beta_dist.rar <-t(motu.abs.f) %>%
+  vegan::avgdist(dmethod = "bray", sample = min_seq)
+nmds.rar <- metaMDS(beta_dist.rar) %>% scores(display=c("sites")) %>% as.tibble(rownames="ID")
+
+# combine metadata and betadiv
+meta_nmds.rar <- dplyr::inner_join(meta, nmds.rar)
+```
+
+**Non-metric Multi-dimensional Scaling (NMDS)** is a way to condense information from multidimensional data (multiple variables/species/OTUs), into a 2D representation or ordination. The closer the points/samples are together in the ordination space, the more similar their microbial communities.
+
+- NMDS plots are non-metric, meaning that among other things, they use data that is not required to fit a normal distribution (there are only a few abundant species, and many, many species with low abundance).
+- What makes an NMDS plot non-metric is that it is rank-based. This means that instead of using the actual values to calculate distances, it uses ranks. 
+
+```{r plotRarefied, fig.width=8, fig.height=4, echo=FALSE}
+p.betadiv.ord.rar <- ggplot(meta_nmds.rar, aes(x = NMDS1, y = NMDS2, color = Timepoint)) +
+  geom_point() +  
+  scale_color_manual(values=c("#E69F00", "#56B4E9")) +
+  theme(legend.position = "bottom")+
+  stat_ellipse() 
+# print both plots
+figure <- ggarrange(p.betadiv.ord, p.betadiv.ord.rar,
+                    labels = c("A", "B"),
+                    ncol = 2, nrow = 1)
+figure
+```
+
+**Figure 5.** Comparison of beta diversity measurements between non-rarefied and rarefied reads. 
+
+Comparison of Bray-Curtis measurements by using non-rarefied and rarefied reads showed no significant difference between the two sets of measurements. This suggests that the rarefication process did not have a significant impact on the beta diversity calculated using the Bray-Curtis metric. 
+
+```{r adonisRarefied, echo=FALSE}
+# test.adonis <- adonis(as.dist(beta_dist.rar) ~ meta_nmds$Timepoint)
+# test.adonis
+# # p.value here
+# test.adonis$aov.tab$`Pr(>F)`[1]
+```
+
+```{r saveFiles, echo=FALSE}
+save(alpha.div, 
+     alpha.div.com, 
+     beta_dist, 
+     beta_dist.rar,
+     file=paste0(PARAM$folder.Rdata, "/motu.div.Rdata"))
+```
+
+################################################################################
+### Check the Duplicate samples
+################################################################################
+
+We have 4 samples with duplicate sequencing, we test here is we can pool them
+First, we extract those samples that are duplicates
+
+```{r}
+# we have 5 dublicates
+table(meta$resubmission) 
+
+## extract  those samples that are duplicates:
+idsdouble=meta$StudienID[meta$resubmission=="yes"]
+# remove NA
+idsdouble=idsdouble[!is.na(idsdouble)]
+meta.dup <- meta %>% filter(meta$StudienID %in% idsdouble)
+```
+
+Next, we perform the wilcoxon test to test whether the duplicates are similar to the all the remaining samples:
+```{r}
+# perform Wilcoxon test as above:
+# 1) duplicates compared to all other samples of the same site
+wilcox.test(beta_dist[[1]][c("PROM0078_2","PROM0078_Z")],
+            beta_dist[[1]][!c("PROM0078_2","PROM0078_Z")], 
+            alternative = "less")
+
+pairs=dist_subset(beta_dist, c("PROM0078_2","PROM0078_Z"))
+beta_dist.sub <- dist_subset(beta_dist, !pairs)
+wilcox.test(pairs, beta_dist, alternative = "less")
+```
+
+These results show that we can pool samples. A significant p-value will mean that, in terms of composition, variation within-duplicates will be smaller than variation between the duplicates and all other samples, so both duplicates should be equivalent
+
+```{r}
+# pool dublicates
+# 1) duplicates compared to all other samples of the same site
+a= motu.abs %>% 
+     mutate(PROM0078 = rowSums(.[c("PROM0078_2", "PROM0078_Z")])/2)
+
+mutate("PROM0078" == rowSums(PROM0078_2 + PROM0078_Z)) %>%
+  select(-PROM0078_Z)
+
+pairs=dist_subset(beta_dist, c("PROM0078_2","PROM0078_Z"))
+beta_dist.sub <- dist_subset(beta_dist, !pairs)
+wilcox.test(pairs, beta_dist, alternative = "less")
+```
+
+
+### Biological biases in taxonomic composition
+
+Are there systematic biases between detected gram-positive/ gram-negative bacterial ratio?
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+# create taxa full name column
+taxa$species=str_split_fixed(taxa$mOTU, pattern = " ", n=2)[,2]
+taxa$name <- paste0(taxa$species, " [", taxa$ref.mOTU_v2_ID, "]")
+
+df = as.data.frame(motu.abs.f)
+frame.phylum <- dplyr::full_join(df %>% 
+                                 mutate(name = rownames(df)), taxa, by = 'name') %>% as.tibble()
+
+frame.phylum <- frame.phylum %>%
+  mutate(gram.phylum = dplyr::case_when(
+         phylum == "1239 Firmicutes" ~ "gram_positive",
+         phylum == "1224 Proteobacteria" ~ "gram_negative",
+         phylum == "201174 Actinobacteria" ~ "gram_positive",
+         phylum == "976 Bacteroidetes" ~ "gram_negative",
+         phylum == "32066 Fusobacteria" ~ "gram_negative",
+         phylum == "74201 Verrucomicrobia" ~ "gram_negative",
+         phylum == "203691 Spirochaetes" ~ "gram_negative",
+         phylum == "544448 Tenericutes" ~ "gram_negative",
+         phylum == "508458 Synergistetes" ~ "gram_negative",
+         TRUE ~ NA_character_))
+
+# Get gram+/gram- ratios
+table.phylum.gram <- matrix(nrow=2, 
+                            ncol=nsamples, 
+                            dimnames=list(c("gram_positive", "gram_negative"), 
+                                          colnames(frame.phylum)[1:nsamples]))
+table.phylum.gram[1, ] <- colSums(frame.phylum[frame.phylum$gram.phylum == "gram_positive", ][,1:nsamples], 
+                                  na.rm = TRUE)
+table.phylum.gram[2, ] <- colSums(frame.phylum[frame.phylum$gram.phylum == "gram_negative", ][,1:nsamples],
+                                  na.rm = TRUE)
+lr.phylum.gram <- log2(table.phylum.gram[1, ] / table.phylum.gram[2, ])
+```
+
+```{r, fig.height=6, fig.width=8, echo=FALSE, warning=FALSE}
+df.plot=as.data.frame(t(table.phylum.gram))
+
+ggplot(df.plot, aes(x=gram_positive, y=gram_negative)) +
+  geom_point(color="#E69F00") +
+  geom_text(label=rownames(df.plot), size=4) +
+  ylab("Gram-Negative)") +  
+  xlab("Gram-Positive)") +
+  ggtitle("Gram-Positive to Gram-Negative") 
+```
+
+**Figure 6.** Comparison of most abundant gram positive and gram negative phylum
+
+Majority of the samples in the pilot show a skew towards gram-negative bacteria. It is important to carefully examine any outliers, such as the absence of gram-negative bacteria in sample 165. This could be due to a variety of factors, including errors in the sampling or analysis process, or it could indicate the presence of unique characteristics or conditions in that sample that are not present in the others. We should carefully check the detailed metadata to understand the underlying reasons.  
+
+```{r, echo=FALSE}
+#Subset frame
+frame.lr.bac_firm <- frame.phylum[frame.phylum$phylum == "976 Bacteroidetes" | frame.phylum$phylum == "1239 Firmicutes", ]
+```
+
+## Conclusion and next steps
+Overall, the dataset appears to be in good condition and we will be able to move forward with our analysis as soon as we receive the metadata.
+
+```{r sessionInfo, echo=FALSE, warning=FALSE, message=FALSE}
+# sessionInfo()
+```
