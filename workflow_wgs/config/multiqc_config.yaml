@@ -1,0 +1,36 @@
+module_order:
+    - fastqc:
+        name: 'FastQC (before trimming)'
+        info: 'This section of the report shows FastQC results before adapter trimming.'
+        path_filters:
+              '*/qc/fastqc/*_fastqc.zip'
+    - fastqc_trimmed:
+        name: 'FastQC (after trimming)'
+        info: 'This section of the report shows FastQC results after adapter trimming.'
+        path_filters:
+              '*/qc/fastqc_processed/trimmed/*_fastqc.zip'
+    - bowtie2:
+        name: 'Bowtie2'
+        info: 'This section of the report shows the Bowtie2 results to human genome'
+        path_filters:
+            '*/logs/bowtie2/*.log'
+    - samtools:
+        name: 'Samtools'
+        info: 'This section of the report shows preliminary results from samtools'
+        path_filters:
+            '*/logs/samtools/*.log'
+    - fastqc-final:
+        name: 'FastQC (after trimming)'
+        info: 'This section of the report shows FastQC results after human filtering.'
+        path_filters:
+              '*/qc/fastqc_hostFil/*_fastqc.zip'
+    - kraken2_human:
+        name: 'kraken2_human'
+        info: 'This section of the report shows kraken2 results after human filtering.'
+        path_filters:
+              '*/processed_data/kraken_human/*-kraken2-out'
+    - kraken2_microbiome:
+        name: 'kraken2_microbiome'
+        info: 'This section of the report shows kraken2 results after mapping.'
+        path_filters:
+              '*/processed_data/kraken2_micro/*-kraken2-out'

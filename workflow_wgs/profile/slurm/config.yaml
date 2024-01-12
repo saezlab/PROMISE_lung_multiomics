@@ -1,0 +1,17 @@
+cores: 8
+local-cores: 1
+printshellcmds: True
+show-failed-logs: False
+use-singularity: False
+use-conda: True
+rerun-incomplete: True
+jobs: 50
+latency-wait: 600
+slurm: True
+restart-times: 2
+keep-going: True
+default-resources:
+    - "slurm_account=ag-saez"
+    - "slurm_partition=single,gpu"
+
+# Command line call: --profile profile/config.yaml 

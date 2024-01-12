@@ -1,0 +1,494 @@
+# Verify required parameters in the config file
+missingParameters = []
+
+configDict = {
+    "techpar": ["threads"],
+    "input": ["dir_rawdata", "dir_input", "adapters", "multiqc_config"],
+    "output": ["dir_out"],
+    "samples": ["allSamplesUnique"],
+    "DB": ["CHM13", "hg19", "kraken_human","kraken_all"],
+    "motus": ["DBLoc", "markerGenesCutoff", "minReadLength"]
+}
+
+for sectionCur, requiredPar in configDict.items():
+    if sectionCur not in config:
+        raise KeyError(f'Couldnt find "{sectionCur}" in the config file or no config file has been specified.')
+    
+    missingParCur = [parCur for parCur in requiredPar if parCur not in config[sectionCur]]
+    missingParameters.extend(missingParCur)
+
+if missingParameters:
+    missingParStr = ",".join(missingParameters)
+    raise KeyError(f'Couldnt find parameter(s) "{missingParStr}" in section "{sectionCur}" in the config file.')
+
+# import timedelta
+from datetime import timedelta
+
+####################################################################################################
+
+# Define directory paths
+dir_rawdata= config["input"]["dir_rawdata"]
+dir_input  = config["input"]["dir_input"]
+dir_output = config["output"]["dir_out"]
+
+# Collect unique sample names
+allSamplesUnique, = glob_wildcards(dir_rawdata + "/{id}_R1.fastq.gz")
+print(allSamplesUnique)
+
+# Generate output file paths
+kraken2 = expand('{dir}/processed_data/kraken_human/{sample}-filtered-reads-R_1.fq.gz', 
+    dir=dir_output, sample=allSamplesUnique)
+motus = expand('{dir}/motus_v3.1.0/taxa/merged.taxa.mg2', 
+    dir=dir_output, sample=allSamplesUnique)
+#motus_allBAMs = expand('{dir}/motus_v3.1.0/snv/motus_snv.mg2', 
+#    dir=dir_output, sample=allSamplesUnique)
+
+allResultFiles = kraken2 + motus 
+print(allResultFiles)
+
+# Rules that can run locally and do not need a designated cluster submission
+localrules: all
+
+# Define the final rule with input dependencies
+rule all:
+    input:
+        dir_output + '/multiqc/multiqc_report.html'
+
+####################################################################################################
+
+# 1. Read QC (FastQC)
+# https://snakemake-wrappers.readthedocs.io/en/0.71.0/wrappers/fastqc.html
+
+rule fastqc:
+    input:
+        forwardRead = dir_rawdata + "/{sample}_R1.fastq.gz",
+        reverseRead = dir_rawdata + "/{sample}_R2.fastq.gz"
+    output:
+        html1       = dir_output + "/qc/fastqc/{sample}_R1_fastqc.html",
+        html2       = dir_output + "/qc/fastqc/{sample}_R2_fastqc.html",
+        zip1        = temp(dir_output + "/qc/fastqc/{sample}_R1_fastqc.zip"),
+        zip2        = temp(dir_output + "/qc/fastqc/{sample}_R2_fastqc.zip")
+        # the suffix _fastqc.zip is necessary for multiqc to find the file. 
+        # If not using multiqc, you are free to choose an arbitrary filename
+    params: 
+        outdir      = dir_output + "/qc/fastqc"
+    log: 
+        dir_output + "/logs/fastqc/{sample}.log"
+    message: 
+        "Running fastQC for sample {wildcards.sample}"
+    threads: 
+        config["techpar"]["threads"]
+    conda: 
+        "envs/fastqc.yaml"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 50000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=150 * attempt)),
+        slurm_extra=" --constraint=gbit"
+
+    shell:
+        """
+        fastqc \
+            {input} \
+            -t {threads} \
+            -o {params.outdir}
+        """
+
+####################################################################################################
+
+# 2. Adapter clipping and merging (short-read: fastp)
+# https://snakemake-wrappers.readthedocs.io/en/stable/wrappers/fastp.html
+
+rule fastp_pe:
+    input:
+        sample    = [dir_rawdata + "/{sample}_R1.fastq.gz", 
+                     dir_rawdata + "/{sample}_R2.fastq.gz"],
+        fastqc    = rules.fastqc.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
+    output:
+        trimmed   = temp([dir_output + "/processed_data/trimmed/{sample}.1.fastq.gz", 
+                     dir_output + "/processed_data/trimmed/{sample}.2.fastq.gz"]),
+        html      = dir_output + "/report/{sample}.html",
+        json      = dir_output + "/report/{sample}.json"
+    message:
+        "Running fastp for sample {wildcards.sample}"
+    log:
+        dir_output + "/logs/fastp/{sample}.log"
+    params:
+        adapters  = dir_input + "/adapt.fas", 
+        extra     = "--qualified_quality_phred 4"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 50000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=1000 * attempt)),  
+        slurm_extra=" --constraint=gbit"
+    threads: 
+        config["techpar"]["threads"]
+    wrapper:
+        "v1.19.1/bio/fastp"
+
+####################################################################################################
+
+# 3. Low complexity and quality filtering (short-read: bbduk)
+# https://snakemake-wrappers.readthedocs.io/en/stable/wrappers/bbtools/bbduk.html
+
+rule bbduk_pe:
+    input:
+        sample    = [dir_output + "/processed_data/trimmed/{sample}.1.fastq.gz", 
+                     dir_output + "/processed_data/trimmed/{sample}.2.fastq.gz"],
+        adapters  = config["input"]["adapters"]
+    output:
+        trimmed   = temp([dir_output + "/processed_data/filtered/{sample}.1.fastq.gz", 
+                     dir_output + "/processed_data/filtered/{sample}.2.fastq.gz"]),
+        stats     = dir_output + "/processed_data/filtered/{sample}.stats.txt",
+    log:
+         dir_output + "/logs/bbduk_pe/{sample}.log"
+    # conda: 
+    #     "envs/bbmap.yaml"
+    message:
+        "Running bbduk for sample {wildcards.sample}"
+    params:
+        extra     = lambda w, input: "ref={},adapters,artifacts ktrim=r k=23 mink=11 hdist=1 tpe tbo trimpolygright=10 minlen=25 maxns=30 entropy=0.5 entropywindow=50 entropyk=5".format(input.adapters),
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 100000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=1500 * attempt)),
+        slurm_extra=" --constraint=gbit"
+    threads: 
+        config["techpar"]["threads"]
+    wrapper:
+        "v2.6.0/bio/bbtools/bbduk"
+
+#
+####################################################################################################
+
+# 4. Bowtie2 mapping against host sequence database, keep both aligned and unaligned reads (paired-end reads)
+
+rule human_filtering:
+    input:
+        fastq1 = dir_output + "/processed_data/filtered/{sample}.1.fastq.gz",
+        fastq2 = dir_output + "/processed_data/filtered/{sample}.2.fastq.gz",
+        #fastq2 = dir_output + "/processed_data/filtered/{sample}.2.fastq.gz",
+        #fastqcProcessed = rules.fastqcProcessed.output 
+    output:
+        bam    = temp(dir_output + "/processed_data/bam/{sample}_mapped_and_unmapped.bam")
+    log:
+        dir_output + "/logs/bowtie2/{sample}.log"
+    message:
+        "Running bowtie human mapping for sample {wildcards.sample}"
+    params:
+        # we use now CHM13, updated whole human genome
+        hostDB  = config["DB"]["CHM13"]
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 150000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=1500 * attempt)),  
+        slurm_extra=" --constraint=gbit"      
+    threads: 
+        config["techpar"]["threads"]
+    conda: 
+        "envs/bowtie2_samtools.yaml"
+    shell:
+        """
+        bowtie2 \
+            -p 12 -x {params.hostDB} \
+            -1 {input.fastq1} \
+            -2 {input.fastq2} 2> {log} | samtools view -bS - > {output.bam}
+        """
+
+####################################################################################################
+
+# 5. Filter  bam files
+
+rule samtools_view:
+    input:
+        bam         = rules.human_filtering.output.bam,
+    output:
+        unmappedBam = temp(dir_output + "/processed_data/bam/{sample}.bothReadsUnmapped.bam")
+        #idx         = dir_output + "/processed_data/bam/{sample}.bai"
+    log:
+        dir_output + "/logs/samtools/{sample}.log"
+    resources:
+        mem_mb      =lambda wildcards, input, threads, attempt: 100000 * attempt,
+        runtime     =lambda wildcards, input, threads, attempt: str(timedelta(minutes=1000 * attempt)),
+    params:
+        extra       ="-f 12 -F 256"  # optional params string
+    threads: 
+        config["techpar"]["threads"]
+    wrapper:
+        "v1.21.0/bio/samtools/view"
+
+####################################################################################################
+
+# 6. Convert a bam file with paired end reads back to unaligned reads in a two separate fastq files with samtools.
+
+rule samtools_fastq_separate:
+    input:
+        unmappedBam  = rules.samtools_view.output.unmappedBam
+    output:
+        hostremoved1 = dir_output + "/processed_data/bam/{sample}_host_removed_R1.fastq.gz",
+        hostremoved2 = dir_output + "/processed_data/bam/{sample}_host_removed_R2.fastq.gz",
+    log:
+        dir_output + "/logs/samtools/{sample}.separate.log"
+    resources:
+        mem_mb      =lambda wildcards, input, threads, attempt: 100000 * attempt,
+        runtime     = lambda wildcards, input, threads, attempt: str(timedelta(minutes=1000 * attempt)),
+    params:
+        sort="-m 4G",
+        fastq="-n"
+    threads:
+        config["techpar"]["threads"]
+    wrapper:
+        "v1.21.0/bio/samtools/fastq/separate"
+###################################################################################################
+
+# 7. Kraken reads to human CHM13 mapping
+
+####################################################################################################
+rule kraken2_human:
+    input:
+        bowtie2out1 = rules.samtools_fastq_separate.output.hostremoved1,
+        bowtie2out2 = rules.samtools_fastq_separate.output.hostremoved2
+    output:
+        kraken_txt  = dir_output + "/processed_data/kraken_human/{sample}-kraken2-out",
+        kraken_rep  = dir_output + "/processed_data/kraken_human/{sample}-kraken2-report",
+        kraken_out1  = dir_output + "/processed_data/kraken_human/{sample}-filtered-reads-R_1.fq.gz",
+        kraken_out2  = dir_output + "/processed_data/kraken_human/{sample}-filtered-reads-R_2.fq.gz"
+    log:
+        dir_output + "/logs/kraken2/{sample}.separate.log"
+    resources:
+        mem_mb      = lambda wildcards, input, threads, attempt: 80000 * attempt,
+        runtime     = lambda wildcards, input, threads, attempt: str(timedelta(minutes=1000 * attempt)),
+    params:
+        kraken2     = config["DB"]["kraken_human"],
+        kraken_outWildcard   = lambda wc: dir_output + "/processed_data/kraken_human/" + wc.sample + "-filtered-reads-R#.fq",
+        kraken_out1Wildcard  = lambda wc: dir_output + "/processed_data/kraken_human/" + wc.sample + "-filtered-reads-R_1.fq",
+        kraken_out2Wildcard  = lambda wc: dir_output + "/processed_data/kraken_human/" + wc.sample + "-filtered-reads-R_2.fq"
+    threads:
+        config["techpar"]["threads"]
+    conda: 
+        "envs/kraken2.yaml"
+                    
+    shell:
+        """
+        kraken2 --paired \
+            --db {params.kraken2} \
+            --t {threads} \
+            --output {output.kraken_txt} \
+            --report {output.kraken_rep} --report-minimizer-data \
+            --unclassified-out {params.kraken_outWildcard} \
+            --gzip-compressed \
+            {input.bowtie2out1}  {input.bowtie2out2} &&
+        gzip -f {params.kraken_out1Wildcard} &&
+        gzip -f {params.kraken_out2Wildcard}
+        """
+####################################################################################################
+
+# 8. Mapping by kraken2 to bacteria
+
+rule kraken2_microbiome:
+    input:
+        bowtie2out1 = rules.kraken2_human.output.kraken_out1,
+        bowtie2out2 = rules.kraken2_human.output.kraken_out1
+        #fastqcProcessed = rules.fastqcProcessed.output 
+        #bowtie2out1 = dir_output + "/processed_data/bam/{sample}_host_removed_R1.fastq.gz",
+        #bowtie2out2 = dir_output + "/processed_data/bam/{sample}_host_removed_R2.fastq.gz",
+    output:
+        kraken_txt  = dir_output + "/processed_data/kraken2_micro/{sample}-kraken2-out",
+        kraken_rep  = dir_output + "/processed_data/kraken2_micro/{sample}-kraken2-report",
+        kraken_out1  = temp(dir_output + "/processed_data/kraken2_micro/{sample}-filtered-reads-R_1.fq.gz"),
+        kraken_out2  = temp(dir_output + "/processed_data/kraken2_micro/{sample}-filtered-reads-R_2.fq.gz")
+    log:
+        dir_output + "/logs/kraken2_micro/{sample}.separate.log"
+    resources:
+        mem_mb      = lambda wildcards, input, threads, attempt: 100000 * attempt,
+        runtime     = lambda wildcards, input, threads, attempt: str(timedelta(minutes=1000 * attempt)),
+    params:
+        kraken2     = config["DB"]["kraken_all"],
+        kraken_outWildcard   = lambda wc: dir_output + "/processed_data/kraken2_micro/" + wc.sample + "-filtered-reads-R#.fq",
+        kraken_out1Wildcard  = lambda wc: dir_output + "/processed_data/kraken2_micro/" + wc.sample + "-filtered-reads-R_1.fq",
+        kraken_out2Wildcard  = lambda wc: dir_output + "/processed_data/kraken2_micro/" + wc.sample + "-filtered-reads-R_2.fq"
+    threads:
+        config["techpar"]["threads"]
+    conda: 
+        "envs/kraken2.yaml"
+                    
+    shell:
+        """
+        kraken2 --paired \
+            --db {params.kraken2} \
+            --t {threads} \
+            --output {output.kraken_txt} \
+            --report {output.kraken_rep} --report-minimizer-data \
+            --unclassified-out {params.kraken_outWildcard} \
+            --gzip-compressed \
+            {input.bowtie2out1}  {input.bowtie2out2} &&
+        gzip -f {params.kraken_out1Wildcard} &&
+        gzip -f {params.kraken_out2Wildcard}
+        """
+
+####################################################################################################
+
+# 9. Read QC (FastQC) after trimming
+
+rule fastqc_hostFil:
+    input:
+        forwardRead = rules.kraken2_microbiome.output.kraken_out1,
+        reverseRead = rules.kraken2_microbiome.output.kraken_out2
+    output:
+        html1       = dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R1_fastqc.html",
+        html2       = dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R2_fastqc.html",
+        zip1        = temp(dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R1_fastqc.zip"),
+        zip2        = temp(dir_output + "/qc/fastqc_hostFil/{sample}_host_removed_R2_fastqc.zip") 
+        # the suffix _fastqc.zip is necessary for multiqc to find the file. 
+        # If not using multiqc, you are free to choose an arbitrary filename        
+    params: 
+        outdir      = dir_output + "/qc/fastqc_hostFil"
+    log: 
+        dir_output + "/logs/fastqc_hostFil/{sample}.log"
+    message: 
+        "Running fastQC after host filtering for sample {wildcards.sample}"
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 10000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=500 * attempt)),
+        #slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+    threads: 
+        config["techpar"]["threads"]
+    conda: 
+        "envs/fastqc.yaml"
+    shell:
+        """
+        fastqc \
+            {input} \
+            -t {threads} \
+            -o {params.outdir}
+        """
+
+####################################################################################################
+
+# 10. Taxonomic profiling by motus v3.1.0
+
+rule motus_taxa:
+    input:
+        fastq1 = rules.fastqc_hostFil.input.forwardRead,
+        fastq2 = rules.fastqc_hostFil.input.reverseRead,
+        fastqc_hostFil = rules.fastqc_hostFil.output # Not strictly required but makes sure the fastqc rule actually runs as otherwise, it would never run because no dependencies
+
+    output:
+        motus  = dir_output + "/motus_v3.1.0/rel/{sample}.rel.motu",
+        motu_c = dir_output + "/motus_v3.1.0/taxa/{sample}.motu",
+        mgc = dir_output + "/motus_v3.1.0/mgc/{sample}.mgc"
+    log:
+        dir_output + "/logs/motus_v3.1.0/{sample}.motusV3_profile_taxa.log"
+    message:
+        "Running motus taxonomic profiling for sample {wildcards.sample}"
+    params:
+        # -n for output sample name
+        # -M  save the marker gene cluster (MGC) counts
+        # -g marker genes cutoff
+        markerGenesCutoff = config["motus"]["markerGenesCutoff"],
+        # -l min read lenght
+        minReadLength = config["motus"]["minReadLength"],
+        DBLoc = config["motus"]["DBLoc"]
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 10000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=500 * attempt)),
+        #slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+    threads: 
+        config["techpar"]["threads"]
+    conda: 
+       "envs/motus.yaml"
+    shell:
+    # Generating taxonomic profiles
+        """
+        motus profile \
+            -f {input.fastq1} \
+            -r {input.fastq2} \
+            -o {output.motus} \
+            -M {output.mgc} \
+            -l {params.minReadLength} \
+            -g {params.markerGenesCutoff} \
+            -n {wildcards.sample} \
+            -t {threads} \
+            -db {params.DBLoc} &> {log} 
+
+        motus profile \
+            -f {input.fastq1} \
+            -r {input.fastq2} \
+            -o {output.motu_c} \
+            -l {params.minReadLength} \
+            -g {params.markerGenesCutoff} \
+            -n {wildcards.sample} \
+            -t {threads} \
+            -c \
+            -db {params.DBLoc} &> {log} 
+        """
+
+####################################################################################################
+
+# 11. Merge motus files
+
+rule motus_merge:
+    input: 
+        allmotu    = expand('{dir}/motus_v3.1.0/taxa/{sample}.motu', 
+        dir = dir_output, sample = allSamplesUnique)
+    output:
+        mergedMotu = dir_output + "/motus_v3.1.0/taxa/merged.taxa.mg2"
+    log:
+        dir_output + "/logs/motus_v3.1.0/motus_v3_merged.log"
+    message:
+        "Running motus merge for samples"
+    params:
+        # -d Call metaSNV on all bam files in the directory. [Mandatory]
+        dirInput  = dir_output + "/motus_v3.1.0/taxa/",
+        minReadLength=config["motus"]["minReadLength"],
+        DBLoc = config["motus"]["DBLoc"]
+    resources:
+        mem_mb=lambda wildcards, input, threads, attempt: 10000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=500 * attempt)),
+        #slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+    threads: 
+        config["techpar"]["threads"]
+    conda: 
+       "envs/motus.yaml"
+    shell:
+    # Generating taxonomic profiles
+        """
+        motus merge \
+            -d {params.dirInput} \
+            -t {threads} \
+            -db {params.DBLoc} \
+            -o {output.mergedMotu} 
+        """
+
+####################################################################################################
+
+# 14. Run multiqc for having an overview pf fastqc
+
+rule multiqc:
+    input:
+        allResultFiles  # Enforce that it runs at the very end, put the array here that you also use for the first all rule
+    output:
+        report = dir_output + '/multiqc/multiqc_report.html'
+    log:
+    message: "Finally, run multiqc"
+    threads: 1
+    params:
+        outputDir = lambda wildcards, output: os.path.dirname(output.report),
+        basename  = lambda wildcards, output: os.path.basename(output.report),
+        rootDir   = dir_output, # replace with the output directory of your pipeline that contains all log files, faatqc files etc
+        config    = config["input"]["multiqc_config"]  # see https://snakemake.readthedocs.io/en/stable/snakefiles/rules.html#snakefiles-aux-source-files
+    conda: 
+        "envs/multiqc.yaml"
+    resources:
+        mem_mb  =   lambda wildcards, input, threads, attempt: 30000 * attempt,
+        runtime =   lambda wildcards, input, threads, attempt: str(
+            timedelta(minutes=200 * attempt)),
+        #slurm_extra="--mail-type=FAIL --mail-user=ece.kartal@uni-heidelberg.de"
+
+    shell:
+        """
+            multiqc \
+                --force  \
+                -o {params.outputDir}  \
+                --filename {params.basename}  \
+                --config {params.config} \
+                {params.rootDir}
+        """

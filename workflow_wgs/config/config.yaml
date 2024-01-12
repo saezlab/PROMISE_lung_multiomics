@@ -1,0 +1,47 @@
+##################################################
+# CONFIGURATION FILE FOR PROMISE LUNG MICROBIOME #
+##################################################
+
+# Quotation marks are optional for strings. 
+# Make sure to put ": " (that is, hyphen space) as separator
+
+techpar:
+  threads: 12
+
+input:
+  #dir_rawdata: "/net/data.isilon/ag-saez/bq_shared/promise_lung_microbiome_raw"
+  #dir_rawdata: "/net/bq-storage/ag-jaeger-partner/Metagenomics/rawdata_AAAWNGMHV"
+  dir_rawdata: "/net/bq-storage/ag-jaeger-partner/WGS"
+  # input folder for all the other databases
+  dir_input: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input"
+  # adapter sequence file for adapter trimming
+  adapters: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/adapt2.fas"
+  multiqc_config: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/workflow/config/multiqc_config.yaml"
+
+output:
+  # STRING. Absolute path to the output directory. Will be created if not yet present.
+  dir_out : "/net/bq-storage/ag-jaeger-partner/output/WGS_output"
+  #dir_out : "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/output_test"
+
+samples:
+  # unique sample IDs
+  allSamplesUnique: "/net/bq-storage/ag-jaeger-partner/WGS/test/*2.fastq.gz"
+
+DB:
+  CHM13: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/human_CHM13/chm13.draft_v1.0_plusY"
+  hg19: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/human_GRCh38/GRCh38_noalt_as"
+  kraken_human: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/kraken2_human_db"
+  kraken_all: "/net/bq-storage/ag-jaeger-partner/DB_kraken2"
+
+motus:
+  # motu database
+  DBLoc: "/net/data.isilon/ag-saez/bq_kece/projects/saez/promise_lung_microbiome/input/db_mOTU"
+  markerGenesCutoff: 2
+  minReadLength: 30
+  # -n for output sample name
+  # -M  save the marker gene cluster (MGC) counts
+  # -g marker genes cutoff
+  # -l min read lenght
+
+
+
