@@ -1,0 +1,26 @@
+module_order:
+    - fastqc:
+        name: 'FastQC (before trimming)'
+        info: 'This section of the report shows FastQC results before adapter trimming.'
+        path_filters:
+              '*/qc/fastqc/*_fastqc.zip'
+    - fastqc_trimmed:
+        name: 'FastQC (after trimming)'
+        info: 'This section of the report shows FastQC results after adapter trimming.'
+        path_filters:
+              '*/qc/fastqc_processed/*_fastqc.zip'
+    - bowtie2:
+        name: 'Bowtie2'
+        info: 'This section of the report shows the Bowtie2 results to human genome'
+        path_filters:
+            '*/logs/bowtie/*.log'
+    - samtools:
+        name: 'Samtools'
+        info: 'This section of the report shows preliminary results from samtools'
+        path_filters:
+            '*/logs/samtools/*.log'
+    - fastqc-final:
+        name: 'FastQC (after trimming)'
+        info: 'This section of the report shows FastQC results after human filtering.'
+        path_filters:
+              '*/qc/fastqc_hostFil/*_fastqc.zip'

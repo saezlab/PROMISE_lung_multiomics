@@ -1,0 +1,10 @@
+name: motus
+channels:
+  - conda-forge
+  - bioconda
+  - defaults
+  - nodefaults
+dependencies:
+  - humann
+  - metaphlan
+  - samtools
