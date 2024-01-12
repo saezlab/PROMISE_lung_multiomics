@@ -5,4 +5,4 @@ channels:
   - defaults
   - nodefaults
 dependencies:
-  - motus=3.0.3
+  - motus=3.1.0

@@ -3,7 +3,6 @@ local-cores: 1
 printshellcmds: True
 show-failed-logs: False
 use-singularity: False
-#singularity-args: "--bind /g/boulard/ --bind /scratch/tabaro"
 use-conda: True
 rerun-incomplete: True
 jobs: 100
