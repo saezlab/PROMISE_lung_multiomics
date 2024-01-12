@@ -1,0 +1,582 @@
+---
+title: "Promise trial diversity analysis"
+author: "Ece Kartal"
+date: "5.12.2023"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+set.seed(183778)
+
+# load library
+library(gtools)
+library(readr)
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(car)
+library(usedist)
+library(vegan)
+library(readxl)
+#library(Rarefy)
+
+# Set parameters
+PARAM <- list()
+PARAM$folder.R <- paste0(getwd(), "/")
+PARAM$folder <- gsub("src/", "", PARAM$folder.R)
+PARAM$folder.input <- paste0(PARAM$folder, "input/")
+PARAM$folder.Rdata <- paste0(PARAM$folder, "Rdata/")
+PARAM$folder.data <- paste0(PARAM$folder, "data/")
+PARAM$folder.output <- paste0(PARAM$folder, "output/metaG/")
+
+#color code for timepoints
+TimepointColor=c("#8dd3c7", "#E69F00", "#fb9a99", "#1f78b4",
+                 "#33a02c", "#beaed4", "#e31a1c")
+
+levels=c("T1/T2", "6-10 week", "T2 extended", "T3", "T3 extended", "T4", "Control")
+threshold <- 10^-5
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+# load metadata 
+# meta <- read_excel(paste0(PARAM$folder.input,
+#                           "metadata/clean/Metadata_PROMISEv2.xlsx"))
+load(paste0(PARAM$folder.Rdata,"metaBatch123.Rdata"))
+# load taxonomy
+taxa <- read.csv(paste0(PARAM$folder.input, "/db_mOTU/db_mOTU_taxonomy_ref-mOTUs.tsv"), 
+                 sep = "\t", 
+                 row.names = 1)
+```
+
+
+################################################################################
+## Results
+################################################################################
+
+In this dataset, I analyzed `nrow(meta)` fecal shotgun samples from NSCLC cancer patients. The total read count in these samples ranged from `min(meta$ReadCount)` to `max(meta$ReadCount)` million. The overall host DNA contamination and low quality reads were less than 1%. 
+
+```{r loadData and clean, message=FALSE, warning=FALSE, echo=FALSE}
+# load motu files
+motu.abs <- read.csv(paste0(PARAM$folder, "/data/metaG/merged.taxa.mg3"),  
+                     sep = "\t", 
+                     skip = 2, 
+                     row.names = 1)
+
+# fix the column names in motu file
+for (i in seq_along(meta$Filename)) {
+  match_index <- which(colnames(motu.abs) == meta$Filename[i])
+  if (length(match_index) > 0) {
+    colnames(motu.abs)[match_index] <- meta$ID[i]
+  }
+}
+colnames(motu.abs)
+```
+
+```{r readcount_plot, message=FALSE, fig.width=10, fig.height=7, echo= FALSE}
+meta$Timepoint <- factor(meta$Timepoint, levels = levels)
+
+p.readcount <- meta %>%
+    filter(Timepoint %in% c("T1/T2", "6-10 week", "T2 extended", "T3",
+                            "T3 extended", "T4")) %>%
+  ggplot(aes(y = `ReadCount (Microbiome)`, x = factor(ID), 
+             fill = as.factor(Timepoint))) +
+  geom_col(stat = "identity", alpha = 0.5,
+           position = position_dodge2(width = 0.9, preserve = "single")) +
+  scale_color_manual(name = "Timepoint", values = TimepointColor) +
+  scale_fill_manual(name = "Timepoint", values = TimepointColor) +
+  facet_grid(. ~ Timepoint, scales = "free_x", space = "free_x", switch = "x") +
+  xlab("Samples") +
+  ylab("Number of Reads (Million)") +
+  ggtitle("Total read counts/sample") +
+  theme_bw() +
+  theme(
+    axis.text.x=element_blank(),
+    axis.ticks.x = element_blank(),
+    #axis.text.x = element_text(angle = 45, hjust = 1, size = 8), 
+        axis.text.y = element_text(size = 20),
+        legend.position = "bottom")
+
+p.readcount
+
+p.readcount <- meta %>%
+    filter(Timepoint %in% c("T1/T2", "6-10 week", "T2 extended", "T3",
+                            "T3 extended", "T4")) %>%
+  ggplot(aes(y = `ReadCount (Microbiome)`, x = factor(ID), 
+             fill = as.factor(Timepoint))) +
+  geom_col(stat = "identity", alpha = 0.5,
+           position = position_dodge2(width = 0.9, preserve = "single")) +
+  scale_color_manual(name = "Timepoint", values = TimepointColor) +
+  scale_fill_manual(name = "Timepoint", values = TimepointColor) +
+  facet_grid(. ~ Timepoint, scales = "free_x", space = "free_x", switch = "x") +
+  xlab("Samples") +
+  ylab("Number of Reads (Million)") +
+  ggtitle("Total read counts/sample") +
+  theme_bw() +
+  theme(
+    axis.text.x=element_blank(),
+    axis.ticks.x = element_blank(),
+    #axis.text.x = element_text(angle = 45, hjust = 1, size = 8), 
+        axis.text.y = element_text(size = 20),
+        legend.position = "bottom")
+
+p.readcount
+ggsave(p.readcount, filename=paste0(PARAM$folder.output, Sys.Date(),
+                                    "-readcounts.pdf"), 
+       width = 16, height = 7)
+```
+
+**Figure 1.** Total read count per sample
+
+We have samples sequenced twice. 
+```{r  echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=10}
+# Identify Samples Sequenced Twice
+duplicated_samples <- meta %>%
+  group_by(SampleName, Timepoint) %>%
+  filter(n() == 2) %>%
+  ungroup()
+
+##########FOR now I exclude frist batch comepletely
+meta =meta %>%
+  filter(Sequencing_batch!=0)
+```
+
+These results show that we can pool samples except "Promo106". A significant p-value will mean that, in terms of composition, variation within-duplicates will be smaller than variation between the duplicates and all other samples, so both duplicates should be equivalent
+
+
+
+################################################################################
+### Diversity Analysis
+################################################################################
+
+Diversity in the ecological sense is intuitively understood as the complexity of a community of organisms.The two main categories of methods are known as **alpha diversity** and **beta diversity** 
+
+```{r rarefaction, echo=FALSE}
+# remove unassigned
+motu.abs <- motu.abs[!rownames(motu.abs) %in% c("unassigned"), ]
+
+# remove low prevelant and abundant taxa
+motu.abs.f <- motu.abs[rowSums(motu.abs > 0) >= 2, colSums(motu.abs) >= 500]
+dim(motu.abs.f)
+# calculate relative abundance
+motu.rel <- prop.table(as.matrix(motu.abs.f), 2)
+# Calculate the row sums
+row_sums <- rowSums(motu.rel >= threshold, na.rm = TRUE)
+# Filter rows
+motu.rel <- motu.rel[rowSums(motu.rel > 0) >= 2, ]
+dim(motu.rel)
+
+# subset otu 
+feat.total <- motu.rel[, match(meta$ID, colnames(motu.rel))]
+dim(feat.total)
+
+# transform count matrix
+motu.t = t(motu.abs)
+
+shared= motu.t %>% 
+  as_tibble(rownames="ID") %>%  
+  pivot_longer(-ID) %>%
+  filter(!grepl("Control", ID, ignore.case = FALSE))
+
+# rarefy based on minimum number of reads
+#min_seq = min(rowSums(motu.t))
+min_seq =400
+# plot rarefaction curves
+#rarecurve.data <- rarecurve(as.matrix(motu.t), step = 50, sample = min_seq)
+```
+
+```{r save files, message=FALSE, echo=FALSE}
+# Save Rdata
+save(motu.abs, motu.rel, meta, motu.abs.f, 
+     file=paste0(PARAM$folder.Rdata, "metag.motus.batch123.Rdata"))
+```
+################################################################################
+### Alpha (within sample) Diversity Analysis
+################################################################################
+
+Alpha diversity measures the diversity within a single sample and is generally based on the number and relative abundance of taxa at some rank
+**Shannon**: How difficult it is to predict the identity of a randomly chosen individual.
+**Simpson**: The probability that two randomly chosen individuals are the same species.
+**Inverse Simpson**: This is a bit confusing to think about. Assuming a theoretically community where all species were equally abundant, this would be the number of species needed to have the same Simpson index value for the community being analyzed.
+
+The `diversity` function from the vegan package can be used to calculate the alpha diversity of a set of samples. 
+
+```{r message=FALSE, echo=FALSE}
+levels=c("T1/T2", "6-10 week", "T2 extended", "T3", "T3 extended", "T4")
+alpha.div <- shared %>%
+  dplyr::group_by(ID) %>%
+  dplyr::summarize(richness = specnumber(value),
+            shannon = diversity(value, index="shannon"),
+            simpson = diversity(value, index="simpson"),
+            invsimpson = 1/simpson,
+            n = sum(value)) %>%
+  pivot_longer(cols=c(richness, shannon, invsimpson, simpson), names_to="metric")
+
+# add status info
+alpha.div.com <- left_join(alpha.div, meta, by="ID")
+alpha.div.com$Timepoint <- factor(alpha.div.com$Timepoint,
+                                  levels = levels)
+```
+
+```{r plotAlpha, echo=FALSE}
+# lets compare the indices based on a scatter-plot.
+alpha.div.com %>%
+  ggplot(aes(x=n, y=value)) +
+  geom_point() +
+  geom_smooth(method=lm) +
+  facet_wrap(~metric, nrow=2, scales="free_y")
+
+# to compare indices between different patient status, boxplot is suitable
+
+p.alpha <- alpha.div.com %>%
+  filter(Timepoint %in% levels) %>%
+  ggplot(aes(x=factor(metric, level=levels), y=value, fill=Timepoint)) + 
+  geom_boxplot() + 
+  #stat_compare_means() + 
+  facet_wrap(. ~ metric, scale="free") +
+  theme_classic()+
+  labs(x = "")+
+  theme(text = element_text(size=14),
+        axis.text.y = element_text(size=14),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "bottom") +
+  scale_color_manual(name = "Timepoint",
+                     labels = levels, 
+                     values=TimepointColor) +
+  scale_fill_manual(name = "Timepoint", 
+                    labels = levels,
+                    values=TimepointColor)
+
+p.alpha
+# save plot
+ggsave(p.alpha, filename=paste0(PARAM$folder.output, Sys.Date(), "-alpha.div.nonrar.pdf"),
+       height = 12, width = 12, unit="cm")
+```
+
+**Figure 3.** Comparison of alpha diversity measurements with read counts. 
+
+As we can see, a higher read count increases the likelihood of detecting a greater diversity of species in the sample (richness).  
+
+We will use `rrarefy` function from vegan package for rarefaction
+
+```{r, echo=FALSE}
+# transform, rarefy
+feat.rare <- rrarefy(motu.abs, min_seq)
+#feat.rare <- t(as.data.frame(feat.rare))
+```
+
+```{r calculateRarefiedAlpha, echo=FALSE}
+shared= t(feat.rare) %>% as_tibble(rownames="ID") %>% pivot_longer(-ID)
+
+alpha.div.r <- shared %>%
+  dplyr::group_by(ID) %>%
+  dplyr::summarize(richness = specnumber(value),
+            shannon = diversity(value, index="shannon"),
+            simpson = diversity(value, index="simpson"),
+            invsimpson = 1/simpson,
+            n = sum(value)) %>%
+  pivot_longer(cols=c(richness, shannon, invsimpson, simpson), 
+               names_to="metric")
+
+# add status info
+alpha.div.rar <- left_join(alpha.div.r, meta, by="ID")
+alpha.div.rar$Timepoint <- factor(alpha.div.rar$Timepoint,
+                                  levels = levels)
+```
+
+In general, you will see roughly normal distribution for Shannon’s diversity as well as most richness metrics. Simpson’s diversity, on the other hand, is usually skewed. So most will use inverse Simpson (1/Simpson) instead. This not only increases normalicy but also makes the output more logical as a higher inverse Simpson value corresponds to higher diversity.
+
+```{r plotAlpharar, fig.width=6, fig.height=6, echo=FALSE}
+# lets compare the indices based on a scatter-plot.
+p.alpha.rar <- alpha.div.rar %>%
+  filter(Timepoint %in% levels) %>%
+  ggplot(aes(x=factor(metric, level=levels), y=value, fill=Timepoint)) + 
+  geom_boxplot() + 
+  #stat_compare_means() + 
+  facet_wrap(. ~ metric, scale="free") +
+  theme_classic()+
+  labs(x = "")+
+  theme(text = element_text(size=10),
+        axis.text.y = element_text(size=10),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "bottom",
+            strip.background = element_rect(fill = "white", colour = "white", linewidth = 1)) +
+  scale_color_manual(name = "Timepoint",
+                     labels = levels, 
+                     values=TimepointColor) +
+  scale_fill_manual(name = "Timepoint", 
+                    labels = levels,
+                    values=TimepointColor)
+p.alpha.rar
+
+# save plot
+ggsave(p.alpha.rar, filename=paste0(PARAM$folder.output, Sys.Date(), "-alpha.div.rar.pdf"),
+        height = 12, width = 12, unit="cm")
+```
+
+```{r fig.width=8, fig.height=4, echo=FALSE}
+# print both plots
+figure.alpha <- ggarrange(p.alpha, p.alpha.rar,
+                    labels = c("A.", "B."),
+                    ncol = 2, nrow = 1)+
+  xlab("")
+figure.alpha
+# save plot
+ggsave(figure.alpha, filename=paste0(PARAM$folder.output, 
+                                     Sys.Date(),
+                                     "alpha.combined.123.pdf"),
+        height = 12, width = 12, unit="cm")
+```
+
+**Figure 4.** Comparison of alpha diversity measurements between non-rarefied and rarefied reads. 
+
+As seen in the figure, when we rarefy samples, we loose a lot of low abundant species, that would change the diversity measurements. 
+
+```{r savealpha, echo=FALSE}
+save(alpha.div, 
+     alpha.div.com, 
+     file=paste0(PARAM$folder.Rdata, Sys.Date(), "-alphadiv123.Rdata"))
+```
+
+```{r, echo=FALSE}
+# Do ANOVA
+metatest = c("CHEMO", "IMMUN", "TARGET",  "Age", "Sex","Vital_status", "Timepoint",   
+             "days_to_death" ,"ReadCount (Homo)")
+
+alpha.div.anova <- alpha.div.com %>%
+  pivot_wider(names_from = metric, values_from = value)
+
+collect.confounders <- data.frame()
+
+for (metavar in metatest) {
+# calculate anova for stool
+lm <- lm(substitute(richness~ as.factor(metavar),
+                    list(metavar = as.name(metavar))),
+         data = alpha.div.anova, na.action=na.omit)
+# Check the summary of the linear model
+summary(lm)
+aov <- Anova(lm) %>% broom::tidy() %>%
+  mutate(metric="richness")
+  aov <- aov[1,]
+  aov$term <- metavar
+
+  # collect data
+  collect.confounders <- rbind(collect.confounders, aov)
+}
+
+# fdr correction
+collect.confounders$p.adj <- p.adjust(collect.confounders$p.value)
+
+# Lets have a look to results
+collect.confounders
+```
+
+################################################################################
+### Beta (between sample) Diversity Analysis
+################################################################################
+
+Beta diversity is a way to quantify the difference between two communities. There are many metrics that are used for this, but we will only mention a few of the more popular ones. 
+
+- Indexes used with presence/absence data:
+*Jaccard*: the number of species common to both communities divided by the number of species in either community.
+*Unifrac*: The fraction of the phylogenetic tree branch lengths shared by the two communities.
+
+- Indexes used with count data:
+*Bray–Curtis*: The sum of lesser counts for species present in both communities divided by the sum of all counts in both communities. This can be thought of as a quantitative version of the Sørensen index.
+*Weighted Unifrac*: The fraction of the phylogenetic tree branch lengths shared by the two communities, weighted by the counts of organisms, so more abundant organisms have a greater influence.
+
+The vegan function `vegdist` is used to compute dissimilarity indexes. **Bray-Curtis** takes into account species presence/absence, as well as abundance, whereas other measures (like Jaccard) only take into account presence/absence and UniFrac incorporates phylogenetic information. Due to this reason, I used the Bray-Curtis metric in this analysis
+
+```{r betanonRarefied, echo=FALSE, warning=FALSE, message=FALSE}
+# remove zymo pos contr
+
+# calculate not rarefied beta diversity
+beta_dist <- vegan::vegdist(t(motu.abs.f), index = "bray")
+```
+
+```{r NMDSnonRarefied, echo=FALSE, warning=FALSE, message=FALSE}
+nmds <- metaMDS(beta_dist) %>% scores(display=c("sites")) %>% as_tibble(rownames="ID")
+# combine metadata and betadiv
+meta_nmds <- dplyr::inner_join(meta, nmds)
+```
+
+```{r plotBeta, echo=FALSE}
+p.betadiv.ord <-   meta_nmds %>%
+  filter(Timepoint %in% c("T1/T2", "6-10 week", "T2 extended", "T3", "T3 extended","T4")) %>%
+  ggplot( aes(x = NMDS1, y = NMDS2, color = Timepoint)) +
+  geom_point(size=2, alpha=0.8) +  
+  scale_color_manual(name = "Timepoint",
+                     values=TimepointColor,
+                     labels = levels) +
+  stat_ellipse() +
+  theme_classic() +
+  theme(legend.position = "bottom",
+        text = element_text(size=14),
+        axis.text.x = element_text(size=14),
+        axis.text.y = element_text(size=14)) 
+
+p.betadiv.ord
+ggsave(p.betadiv.ord, 
+       filename=paste0(PARAM$folder.output, 
+                       Sys.Date(), "beta_nonrar.pdf"),
+       height = 15, width = 12, unit="cm")
+```
+
+#### Calculating Rarefied Beta Diversity
+
+`avgdist` function computes the dissimilarity matrix of a dataset multiple times using `vegdist` while randomly subsampling the dataset each time. All of the subsampled iterations are then averaged (mean) to provide a distance matrix that represents the average of multiple subsampling iterations.
+
+```{r betaRarefied, echo=FALSE, warning=FALSE, message=FALSE}
+# calculate rarefied beta diversity
+motu.abs.r <- round(motu.abs.f)
+
+beta_dist.rar <-t(motu.abs.r) %>%
+  vegan::avgdist(dmethod = "bray", sample = min_seq)
+
+nmds.rar <- metaMDS(beta_dist.rar) %>% 
+  scores(display=c("sites")) %>% 
+  as.tibble(rownames="ID")
+
+# combine metadata and betadiv
+meta_nmds.rar <- dplyr::inner_join(meta, nmds.rar)
+```
+
+**Non-metric Multi-dimensional Scaling (NMDS)** is a way to condense information from multidimensional data (multiple variables/species/OTUs), into a 2D representation or ordination. The closer the points/samples are together in the ordination space, the more similar their microbial communities.
+
+- NMDS plots are non-metric, meaning that among other things, they use data that is not required to fit a normal distribution (there are only a few abundant species, and many, many species with low abundance).
+- What makes an NMDS plot non-metric is that it is rank-based. This means that instead of using the actual values to calculate distances, it uses ranks. 
+
+```{r plotRarefied, fig.width=8, fig.height=4, echo=FALSE}
+p.betadiv.ord.rar <-   meta_nmds.rar %>%
+  filter(Timepoint %in% c("T1/T2", "6-10 week", "T2 extended","T3","T3 extended", "T4")) %>%
+  ggplot( aes(x = NMDS1, y = NMDS2, color = Timepoint)) +
+  geom_point(size=3, alpha=0.8) +  
+  scale_color_manual(name = "Timepoint",
+                     values=TimepointColor,
+                     labels = levels) +
+  stat_ellipse() +
+  theme_classic() +
+  theme(legend.position = "bottom",
+        text = element_text(size=13),
+        axis.text.x = element_text(size=13),
+        axis.text.y = element_text(size=13)) 
+ 
+p.betadiv.ord.rar
+ggsave(p.betadiv.ord.rar, filename=paste0(PARAM$folder.output,
+                                          Sys.Date(),"beta_rar123.pdf"),
+        height = 15, width = 13, unit="cm")
+
+# # print both plots
+figure <- ggarrange(p.betadiv.ord, p.betadiv.ord.rar,
+                    labels = c("A", "B"),
+                    ncol = 2, nrow = 1)
+figure
+ggsave(figure, filename=paste0(PARAM$folder.output,Sys.Date(), "betadiv.pdf"), width = 15, height = 8)
+```
+
+**Figure 5.** Comparison of beta diversity measurements between non-rarefied and rarefied reads. 
+
+Comparison of Bray-Curtis measurements by using non-rarefied and rarefied reads showed no significant difference between the two sets of measurements. This suggests that the rarefication process did not have a significant impact on the beta diversity calculated using the Bray-Curtis metric. 
+
+```{r adonisRarefied, echo=FALSE}
+# test.adonis <- adonis2(as.dist(beta_dist) ~ meta_nmds$Sequencing_batch)
+# # test.adonis
+# # # p.value here
+# test.adonis$aov.tab$`Pr(>F)`[1]
+```
+
+```{r savebeta, echo=FALSE}
+save(beta_dist, 
+     beta_dist.rar,
+     file=paste0(PARAM$folder.Rdata, "/betadiv123.Rdata"))
+```
+
+### Biological biases in taxonomic composition
+
+Are there systematic biases between detected gram-positive/ gram-negative bacterial ratio?
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+nsamples=ncol(motu.abs)
+# create taxa full name column
+taxa$species=str_split_fixed(taxa$mOTU, pattern = " ", n=2)[,2]
+taxa$name <- paste0(taxa$species, " [", taxa$ref.mOTU_v2_ID, "]")
+
+df = as.data.frame(motu.abs.f)
+frame.phylum <- dplyr::full_join(df %>% mutate(name = rownames(df)), taxa, by = 'name') %>% 
+  as.tibble()
+
+frame.phylum <- frame.phylum %>%
+  mutate(gram.phylum = dplyr::case_when(
+         phylum == "1239 Firmicutes" ~ "gram_positive",
+         phylum == "1224 Proteobacteria" ~ "gram_negative",
+         phylum == "201174 Actinobacteria" ~ "gram_positive",
+         phylum == "976 Bacteroidetes" ~ "gram_negative",
+         phylum == "32066 Fusobacteria" ~ "gram_negative",
+         phylum == "74201 Verrucomicrobia" ~ "gram_negative",
+         phylum == "203691 Spirochaetes" ~ "gram_negative",
+         phylum == "544448 Tenericutes" ~ "gram_negative",
+         phylum == "508458 Synergistetes" ~ "gram_negative",
+         TRUE ~ NA_character_))
+# Filter the dataframe to keep only numeric columns
+numeric_cols <- frame.phylum %>% select(where(is.numeric))
+
+# Initialize the table to store sums
+table.phylum.gram <- matrix(nrow = 2, ncol = ncol(numeric_cols),  # Update the number of columns here
+                            dimnames = list(c("gram_positive", "gram_negative"), colnames(numeric_cols)))
+
+# Calculate sums for gram-positive and gram-negative
+table.phylum.gram[1, ] <- colSums(numeric_cols[frame.phylum$gram.phylum == "gram_positive", ], na.rm = TRUE)
+table.phylum.gram[2, ] <- colSums(numeric_cols[frame.phylum$gram.phylum == "gram_negative", ], na.rm = TRUE)
+
+# Handle potential division by zero and missing values
+lr.phylum.gram <- ifelse(table.phylum.gram[2, ] == 0, NA, log2(table.phylum.gram[1, ] / table.phylum.gram[2, ]))
+```
+
+```{r, fig.height=7, fig.width=10, echo=FALSE, warning=FALSE}
+df.plot <- as.data.frame(t(table.phylum.gram))
+# Filter labels for samples with scores greater than 4000
+filtered_data <- df.plot[df.plot$gram_positive > 4000 | df.plot$gram_negative > 4000, ]
+
+p.gram <- ggplot(df.plot, aes(x = gram_positive, y = gram_negative)) +
+  geom_point(color = "#E69F00", size = 4, alpha=0.8) +
+  geom_text(data = filtered_data, aes(label = rownames(filtered_data)), size = 3) +
+  ylab("Gram-Negative") +
+  xlab("Gram-Positive") +
+  theme_classic() +
+  ggtitle("Gram-Positive to Gram-Negative") +
+  theme(text = element_text(size = 7),
+        axis.text.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14))
+
+p.gram
+
+ggsave(p.gram, filename = paste0(PARAM$folder.output, Sys.Date(), "gram_bias.pdf"),
+       width = 15, height = 10, unit = "cm")
+```
+
+**Figure 6.** Comparison of most abundant gram positive and gram negative phylum
+
+Majority of the samples in the pilot show a skew towards gram-negative bacteria. It is important to carefully examine any outliers, such as the absence of gram-negative bacteria in sample 165. This could be due to a variety of factors, including errors in the sampling or analysis process, or it could indicate the presence of unique characteristics or conditions in that sample that are not present in the others. We should carefully check the detailed metadata to understand the underlying reasons.  
+
+```{r, echo=FALSE}
+#Subset frame
+frame.lr.bac_firm <- frame.phylum[frame.phylum$phylum == "976 Bacteroidetes" | frame.phylum$phylum == "1239 Firmicutes", ]
+```
+
+
+## Conclusion and next steps
+Overall, the dataset appears to be in good condition and we will be able to move forward with our analysis as soon as we receive the metadata.
+
+```{r sessionInfo, echo=FALSE, warning=FALSE, message=FALSE}
+ sessionInfo()
+```

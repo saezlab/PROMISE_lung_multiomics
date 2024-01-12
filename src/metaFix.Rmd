@@ -1,0 +1,84 @@
+---
+title: "fix meta"
+output: html_notebook
+---
+
+Metadata is in several excel sheet, we firts combine them to work with it.
+```{r}
+# Set parameters
+PARAM <- list()
+PARAM$folder.R <- paste0(getwd(), "/")
+PARAM$folder <- gsub("src/", "", PARAM$folder.R)
+PARAM$folder.input <- paste0(PARAM$folder, "input/")
+PARAM$folder.Rdata <- paste0(PARAM$folder, "Rdata/")
+
+library(tidyverse)
+library(readxl)
+```
+
+```{r}
+# read meta files 
+Metadata_PROMISE <- read_excel(paste0(PARAM$folder.input,"/metadata/clean/Metadata_PROMISE.xlsx"))
+meta1 <- read_excel(paste0(PARAM$folder.input, "metadata/Summary_vital_status_PROMISE_20231001.xlsx"), sheet = "Vital_status")
+meta2 <-  read_excel(paste0(PARAM$folder.input, "metadata/Summary_vital_status_PROMISE_20231001.xlsx"), sheet = "Therapy")
+meta3 <-  read_excel(paste0(PARAM$folder.input, "metadata/Summary_vital_status_PROMISE_20231001.xlsx"), sheet = "Response")
+
+## TODO ##
+meta4 <-  read_excel(paste0(PARAM$folder.input, "metadata/Summary_vital_status_PROMISE_20231001.xlsx"), sheet = "RECIST")
+meta5 <-  read_excel(paste0(PARAM$folder.input, "metadata/Summary_vital_status_PROMISE_20231001.xlsx"), sheet = "weight_bsa_cycle")
+meta6 <-  read_excel(paste0(PARAM$folder.input, "metadata/Summary_vital_status_PROMISE_20231001.xlsx"), sheet = "Antibiotics")
+meta7 <-  read_excel(paste0(PARAM$folder.input, "metadata/Summary_vital_status_PROMISE_20231001.xlsx"), sheet = "TNM")
+
+
+# load read counts
+mqc_kraken <- read_delim(paste0(PARAM$folder, "data/metag/multiqc_metag/mqc_kraken-top-n-plot_Species.txt"), 
+                         delim = "\t", escape_double = FALSE, trim_ws = TRUE)
+colnames(mqc_kraken) <- c("Filename", "ReadCount (Homo)", "ReadCount (Microbiome)")
+# Replace "-kraken2-report" with an empty string in the specified column
+mqc_kraken$Filename <- gsub("-kraken2-report", "", mqc_kraken$Filename)
+# Replace "-" with "." in the "Filename" column
+mqc_kraken$Filename <- gsub("-", ".", mqc_kraken$Filename)
+```
+
+```{r}
+# there are a lot of duplicates, rmeove duplicate rows
+meta2=distinct(meta2)
+meta3=distinct(meta3)
+# Combine the two dataframes by StudentID
+# Pivot the long table into a wider format
+# wide_data <- meta2 %>%
+#   pivot_wider(names_from = Timepoint, values_from = Note)
+df1 <- Metadata_PROMISE %>%
+  left_join(meta2, by = c("StudienID", "Timepoint"))
+  #left_join(meta3, by = c("StudienID", "Timepoint")) 
+
+df2  <- df1 %>%
+  left_join(meta1, by = c("StudienID"))
+df3 <- df2 %>%
+  full_join(mqc_kraken, by = c("Filename"))
+```
+
+```{r}
+meta=df3
+meta$`ReadCount (Microbiome)` = as.integer(meta$`ReadCount (Microbiome)`)
+meta$ID <- paste0(meta$SampleName, "_", meta$Timepoint, "_", meta$Sequencing_batch)
+
+# recode all the T2 extended as T3 after taslking with Inka
+meta <- meta %>%
+  # mutate(Timepoint = ifelse(Timepoint == "T2 extended", "T3", Timepoint)) %>%
+  mutate(Timepoint = ifelse(Timepoint == "0", "Control", Timepoint)) %>%
+  filter(Sequencing_batch %in% c(0,1,2,3))
+```
+
+```{r save files, message=FALSE, echo=FALSE}
+# Save Rdata
+save(meta, 
+     file=paste0(PARAM$folder.Rdata, "metaBatch123.Rdata"))
+```
+
+
+
+
+
+
+

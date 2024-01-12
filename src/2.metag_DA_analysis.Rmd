@@ -1,0 +1,434 @@
+---
+title: "Differential abundance analysis of Promise samples"
+author: "Ece Kartal"
+date: "01.10.2023"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+set.seed(1895)
+
+# load library
+library(gtools)
+library(readr)
+library(tidyverse)
+library(readxl)
+library(knitr)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+library(car)
+library(vegan)
+library(reshape2)
+library(ggrepel)
+library(pROC)
+#library(Rarefy)
+
+# Set parameters
+PARAM <- list()
+PARAM$folder.R <- paste0(getwd(), "/")
+PARAM$folder <- gsub("src/", "", PARAM$folder.R)
+PARAM$folder.input <- paste0(PARAM$folder, "input/")
+PARAM$folder.Rdata <- paste0(PARAM$folder, "Rdata/")
+PARAM$folder.data <- paste0(PARAM$folder, "data/")
+PARAM$folder.output <- paste0(PARAM$folder, "output/metaG/")
+
+#color code for timepoints
+TimepointColor=c("#8dd3c7", "#E69F00", "#fb9a99", "#1f78b4", "#33a02c", "#beaed4", "#e31a1c")
+levels=c("T1/T2", "6-10 week", "T2 extended", "T3", "T3 extended", "T4", "Control")
+```
+
+```{r loadData, message=FALSE}
+# load data
+load(paste0(PARAM$folder.Rdata,"metaBatch123.Rdata"))
+load(paste0(PARAM$folder.Rdata,"metag.motus.batch123.Rdata"))
+```
+
+################################################################################
+## Differential Abundance Analysis with Wilcoxin Test
+################################################################################
+
+Next, we can analyze the differences between the microbiome profiles of both groups. To do so, we use `wilcoxin test` which is a statistical test where all species in the count matrix are compared between the sample groups of interest.  `wilcoxin test` is not the only option to perform Differential Abundance Analysis. Common alternatives include [`edgeR`](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC2796818/) and [`DESeq2`](https://genomebiology.biomedcentral.com/articles/10.1186/s13059-014-0550-8).
+
+A **Wilcoxon test** estimates the difference in an outcome between two groups. It is a non-parametric alternative to a t-test, which means that the Wilcoxon test does not make any assumptions about the data.
+
+```{r differentialAbundance}
+featTable = motu.rel
+# subset meta accordingly
+# fix meta IDs
+# meta$ID[which(meta$ID == 'PROM0078_2')] = "PROM0078"
+# meta$ID[which(meta$ID == 'PROM0106_2')] = "PROM00106"
+# meta$ID[which(meta$ID == 'PROM0110_2')] = "PROM0110"
+# meta$ID[which(meta$ID == 'PROM0151_2')] = "PROM0151"
+  
+metaTable = meta[meta$ID %in% colnames(motu.rel),] 
+featTable = motu.rel[,colnames(motu.rel) %in% metaTable$ID ] 
+
+
+# combine extended timepoints to next timepoint
+metaTable <- metaTable %>%
+  mutate(Timepoint = case_when(
+    Timepoint == "T2 extended" ~ "T3",
+    Timepoint == "T3 extended" ~ "T4",
+    TRUE ~ Timepoint  # Leave other values unchanged
+  ))
+
+# define cutoffs
+p_cutoff = 0.01
+##############################################################################
+p.cal <- tribble(~ID, ~pval, ~adj.pval, ~log10.adj, ~aucs.mat, ~fc, ~sig)
+  
+for (rowname in row.names(featTable)) {
+  
+    # define matrix to compare
+    x <- as.numeric(featTable[rowname, metaTable %>% filter(Timepoint=='T1/T2') %>% pull(ID)])
+    y <- as.numeric(featTable[rowname, metaTable %>% filter(Timepoint=='6-10 week') %>% pull(ID)])
+
+    # Fold change
+    q.p <- quantile(log10(x+1e-05), probs=seq(.1, .9, .05))
+    q.n <- quantile(log10(y+1e-05), probs=seq(.1, .9, .05))
+   
+    # create matrix
+    p.cal=add_row(p.cal, 
+                  ID = rowname,
+                  pval = wilcox.test(x, y, exact=FALSE)$p.value,
+                  aucs.mat = roc(controls=y, cases=x, direction='<', ci=TRUE, auc=TRUE)$ci[2], 
+                  fc = sum(q.p - q.n)/length(q.p))
+}
+
+# p.adjust
+p.cal <- p.cal %>% 
+  mutate(adj.pval = p.adjust(pval, method = "BH")) %>%
+  mutate(sig = ifelse(pval < p_cutoff, "p < 0.01", "not sig")) %>%
+  mutate(log10.adj = -log10(adj.pval))%>%
+  mutate(log10.p = -log10(pval))
+
+# Lets have a look to results
+p.cal
+p.cal.T1T2vs610week=p.cal
+# save file
+write.table(p.cal, file=paste0(PARAM$folder.output, 'wilcox.results.batch123.tsv'), 
+            sep='\t', row.names=TRUE, col.names=TRUE)
+
+
+
+# List of timepoint variations to compare
+timepoints <- c("T1/T2", "6-10 week", "T3", "T4")
+#levels=c("T1/T2", "6-10 week", "T2 extended", "T3", "T3 extended", "T4", "Control")
+# create empty tibble
+df.cal <- tribble(~ID, ~pval, ~adj.pval, ~log10.adj, ~aucs.mat, ~fc, ~sig, ~comparison)
+
+for (rowname in row.names(featTable)) {
+  
+  fc_sum <- 0
+  p_values <- c()
+  
+  for (i in seq_along(timepoints)) {
+    for (j in (i+1):length(timepoints)) {
+      timepoint_x <- timepoints[i]
+      timepoint_y <- timepoints[j]
+      comparison <- paste(timepoint_x, "/", timepoint_y)
+      
+      x <- as.numeric(featTable[rowname, metaTable %>% 
+                                  filter(Timepoint == timepoint_x) %>% pull(ID)])
+      y <- as.numeric(featTable[rowname, metaTable %>% 
+                                  filter(Timepoint == timepoint_y) %>% pull(ID)])
+      
+      q.x <- quantile(log10(x + 1e-05), probs = seq(.1, .9, .05))
+      q.y <- quantile(log10(y + 1e-05), probs = seq(.1, .9, .05))
+      
+      # Check if both x and y have enough observations for ROC analysis
+      if (length(x) >= 2 && length(y) >= 2) {
+        p_values <- c(p_values, wilcox.test(x, y, exact = FALSE)$p.value)
+        fc_sum <- fc_sum + sum(q.x - q.y)
+        
+        # Perform ROC analysis only if both groups have observations
+        if (length(x) > 0 && length(y) > 0) {
+          aucs.mat <- roc(controls = y, cases = x, direction = '<', ci = TRUE, auc = TRUE)$ci[2]
+        } else {
+          aucs.mat <- NA
+        }
+      }
+      
+      # Create matrix
+    # Create matrix
+      fc <- fc_sum / choose(length(timepoints), 2)
+      df.cal <- add_row(df.cal,  # Fix: Use df.cal instead of p.cal
+                       ID = rowname,
+                       pval = min(p_values),
+                       aucs.mat = aucs.mat, 
+                       fc = fc,
+                       comparison = comparison)
+    }
+  }
+}
+
+# p.adjust
+df.cal <- df.cal %>% 
+  mutate(adj.pval = p.adjust(pval, method = "BH")) %>%
+  mutate(sig = ifelse(pval < p_cutoff, "pval < 0.01", "not sig")) %>%
+  mutate(log10.adj = -log10(adj.pval)) %>%
+  mutate(log10.p = -log10(pval))
+```
+
+And look at the distribution of the adjusted P values:
+
+```{r histogram}
+ggplot2::ggplot(p.cal, aes(x = pval)) +
+  ggplot2::geom_histogram()
+```
+
+We can also visualize the abundance changes  using one of the most common plots to explore Differential Abundance Analysis results, the **volcano plot**:
+
+```{r volcanoPlot, eval=FALSE}
+# Volcano plot 
+p.wilcox <- df.cal %>%
+  filter(comparison %in% "T1/T2 / 6-10 week" ) %>%
+ggplot(aes(x = fc, y = log10.p)) +
+  geom_point(aes(color = sig), alpha=0.7) +
+  scale_color_manual(values = c("black","red")) +
+  # add a line for significance
+  geom_hline(yintercept=-log10(p_cutoff)) +
+  # add ID for significant species
+  #geom_text_repel(data = subset(df.cal, pval < p_cutoff), aes(label = ID), size = 3) +
+  # add axis labels 
+  ggtitle("Differentially abundant species") +
+  xlab("Generalized fold change") + 
+  ylab("Log10 adjusted p-value") +
+  theme_classic()+ 
+  theme(legend.position = "left",
+        text = element_text(size=10),
+        axis.text.x = element_text(size=15),
+        axis.text.y = element_text(size=15)) 
+  
+p.wilcox
+# save the plot
+ggsave(p.wilcox, filename=paste0(PARAM$folder.output, 
+                                 Sys.Date(), "wilcox.volcano.plot.pdf"),
+       height = 10, width = 13, unit="cm")
+```
+
+Now, we can focus on the species with differential abundace across timepoints
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=11}
+sp.list <- c(
+"Turicibacter sanguinis [ref_mOTU_v3_04703]",
+"Massilioclostridium coli [ref_mOTU_v3_10237]",
+"Massiliomicrobiota species incertae sedis [meta_mOTU_v3_13965]",
+"Clostridiales Family XIII. Incertae Sedis species incertae sedis [ext_mOTU_v3_26966]",
+"Butyricicoccus pullicaecorum [ref_mOTU_v3_02158]",
+"Anaerotruncus colihominis [ref_mOTU_v3_03438]"
+)
+sp.list <- df.cal %>%
+  filter(pval <0.001) %>%
+  filter(comparison != "T4 / T4") %>%
+    filter(comparison != "T4 / NA") %>%
+  filter(ID !="unassigned")
+
+# compare the genus difference btw samples and timepoints
+df = as.data.frame(t(motu.rel))
+
+frame.meta <- dplyr::full_join(df %>%  
+              mutate(ID = rownames(df)), metaTable, by = 'ID') %>% 
+  as.tibble()
+
+# get species that are diff abundant
+selected_ids <- sp.list$ID
+
+# Filter columns in frame.meta based on selected IDs
+species.diff <- frame.meta %>%
+  select(ID, one_of(selected_ids))
+
+df.plot = melt(frame.meta)
+
+frame.m <- df.plot %>%
+  filter(variable %in% colnames(species.diff)) %>%
+  filter(ID!="PositiveControl_Z")
+
+# recode timepoints
+#frame.m$Timepoint[frame.m$Timepoint == "T1/T2" ] <- "T0"
+#frame.m$Timepoint[frame.m$Timepoint == "6-10 week" ] <- "T1"
+
+frame.m$sp <- str_replace_all(frame.m$variable,
+                                    c("ef_mOTU_v3" = "",
+                                      "incertae sedis" = "",
+                                      "eta_mOTU_v3" = ""))
+
+p.species <- frame.m %>%
+  filter(Timepoint %in% c("T1/T2", "6-10 week","T3", "T4")) %>%
+  ggplot(aes(y=log2(value), x=as.factor(Timepoint))) +
+  geom_violin(aes(color = Timepoint,  fill= Timepoint), alpha=0.8) +
+  geom_point(color="grey80", size=1, alpha=0.5)+
+  scale_color_manual(values = TimepointColor) +
+  scale_fill_manual(values = TimepointColor) +
+  #stat_compare_means(method = "t.test") +
+  xlab("Timepoint") +
+  ylab( "Relative abundance") +
+  facet_wrap(.~sp, nrow=2,  switch = "x") +
+  stat_compare_means(label = "p.format", paired = TRUE, size=3) +
+  #geom_line(aes(group = StudienID)) +
+  theme_classic() +
+  theme(text = element_text(size=9),
+        axis.text.y = element_text(size=9),
+        axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        legend.position = "left")
+
+ p.species
+ # save plot
+ggsave(p.species, filename=paste0(PARAM$folder.output, 
+                                  Sys.Date(), "species_barplot.pdf"),
+       width = 25, height = 15, unit="cm")
+ 
+```
+
+```{r echo=FALSE, warning=FALSE, message=FALSE, fig.width=12, fig.height=11}
+# Create a heatmap using ggplot2
+p.heat <- ggplot(frame.m, aes(x = sp, y = ID, fill = log2(value))) +
+  geom_tile() +
+  scale_color_brewer(palette = "BuPu") +
+  theme_minimal() +
+  labs(title = "Heatmap of Species by Timepoint",
+       x = "Species",
+       y = "Individuals") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1),  # Hide x-axis text
+        axis.text.y = element_blank()  # Hide y-axis text
+        #axis.title.x = element_blank(),  # Hide x-axis title
+        #axis.title.y = element_blank()
+        )  # Hide y-axis title
+
+p.heat
+ggsave(p.species, filename=paste0(PARAM$folder.output, 
+                                  Sys.Date(), "species_heatmap.pdf"),
+       width = 15, height = 10, unit="cm")
+```
+
+################################################################################
+## Confounder analysis 
+################################################################################
+
+```{r eval=FALSE}
+feat.rel = motu.rel
+# label continuous meta variables
+meta <- meta %>%
+  # age
+  mutate(DNA_con_factor=as.factor(
+    cut(meta$`DNA concentartion [ng/µl]`, 
+        breaks = quantile(meta$`DNA concentartion [ng/µl]`,na.rm = TRUE), 
+        labels=c(1,2,3,4)))) %>%
+  # library size
+  mutate(lib_size_factor=as.factor(
+    cut(meta$`ReadCount (Microbiome)`, 
+        breaks = quantile(meta$`ReadCount (Microbiome)`,na.rm = TRUE),
+        labels=c(1,2,3,4))))
+```
+
+```{r eval=FALSE}
+#  variance explained by disease timepoint
+ss.disease <- apply(feat.rel, 1, FUN=function(x, label){
+  rank.x <- rank(x)/length(x)
+  ss.tot <- sum((rank.x - mean(rank.x))^2)/length(rank.x)
+  ss.o.i <- sum(vapply(unique(label), function(l){
+    sum((rank.x[label==l] - mean(rank.x[label==l]))^2)
+  }, FUN.VALUE = double(1)))/length(rank.x)
+  return(1-ss.o.i/ss.tot)
+}, label=meta$Timepoint)
+
+# calculate trimmed mean abundance
+t.mean <- apply(feat.rel, 1, mean, trim=0.1)
+
+df.plot.all <- tibble(
+  species=rownames(feat.rel),
+  disease=ss.disease,
+  t.mean=t.mean)
+  #adj.p.val=associations(siamcat)[,'p.adj'],
+  #meta.significance=associations(siamcat)[,'p.adj'] < 0.05)
+
+var = c("BoxID",  "lib_size_factor", "DNA_con_factor")  
+meta.c=as.data.frame(meta)
+rownames(meta.c) = meta.c$ID
+###############################################################################
+# test all possible confounders
+df.list <- list()
+for (meta.var in var){
+  
+  cat('###############################\n', meta.var, '\n')
+  meta.c <- meta.c[!is.na(meta.c[[meta.var]]),]
+  
+  cat('After filtering, the distribution of variables is:\n')
+  print(table(meta.c$Timepoint, meta.c[[meta.var]]))
+  feat.red <- feat.rel[,rownames(meta.c)]
+  
+  cat('Calculating variance explained by meta-variable...\n')
+  ss.var <- apply(feat.red, 1, FUN=function(x, label){
+    rank.x <- rank(x)/length(x)
+    ss.tot <- sum((rank.x - mean(rank.x))^2)/length(rank.x)
+    ss.o.i <- sum(vapply(unique(label), function(l){
+      sum((rank.x[label==l] - mean(rank.x[label==l]))^2)
+    }, FUN.VALUE = double(1)))/length(rank.x)
+    return(1 - ss.o.i/ss.tot)
+  }, label=meta.c[[meta.var]])
+  df.plot.all[[meta.var]] <- ss.var
+  
+  cat('Calculating association with the meta-variable...\n')
+  if (length(unique(meta.c[[meta.var]]))  > 2){
+    meta.significance <- apply(feat.red, 1, FUN=function(x, var){
+      kruskal.test(x~as.factor(var))$p.value
+    }, var=meta.c[[meta.var]])
+  } else {
+    meta.significance <- apply(feat.red, 1, FUN=function(x, var){
+      wilcox.test(x~as.factor(var))$p.value
+    }, var=meta.c[[meta.var]])
+  }
+  meta.significance <- p.adjust(meta.significance, method='fdr')
+  df.plot.all[[paste0(meta.var, '.significance')]] <- meta.significance
+  cat('\n')
+}
+```
+
+
+
+```{r, eval=FALSE}
+# plot metadata variables
+g <- df.plot.all %>%
+  gather(key=type, value=meta.c, -species, -disease,
+         -t.mean) %>%
+  filter(!str_detect(type, '.significance')) %>%
+  filter(complete.cases(.)) %>%
+
+  
+  ggplot(aes(x=disease, y=meta.c, size=t.mean+1e-06)) +
+  geom_point() +
+  #geom_text(aes(label=ifelse(meta.significance==TRUE, species,'')),
+   #         size=1, hjust=0, vjust=0, angle=90)+
+  xlab('Variance explained by disease status') +
+  ylab('Variance explained by metadata variable') +
+  theme_bw() +
+  facet_wrap(.~type, ncol=4) +
+  theme(strip.background = element_blank(),
+        panel.grid.minor = element_blank()) +
+  scale_x_continuous(limits=c(0,0.3), breaks = seq(from=0, to=0.3, by=0.1)) + 
+  scale_y_continuous(limits=c(0,0.3), breaks = seq(from=0, to=0.3, by=0.1)) +
+  scale_colour_manual(values = alpha(c('black', '#CC071E'),
+                                     alpha=c(.3, .7)),
+                      name=paste0('Significance\n(', ' 1e-05 FDR)')) +
+  scale_size_area(name='Trimmed mean\nabundance',
+                  breaks=c(1e-05, 1e-03, 1e-02)) +
+  guides(size = "legend", colour='legend')
+
+  print(g)
+ggsave(g, filename = paste0(PARAM$folder.output,
+                            Sys.Date(), 'confounder_plot.pdf'),
+       width = 12, height = 4, useDingbats=FALSE)
+```
+
+## Session info
+
+```{r sessionInfo}
+sessionInfo()
+```
