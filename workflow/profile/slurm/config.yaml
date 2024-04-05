@@ -14,4 +14,3 @@ default-resources:
     - "slurm_account=ag-saez"
     - "slurm_partition=single"
 
-# Command line call: --profile profile/config.yaml 

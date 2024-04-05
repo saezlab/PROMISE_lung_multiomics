@@ -83,7 +83,7 @@ rule fastqc:
     resources:
         mem_mb=lambda wildcards, input, threads, attempt: 50000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
-            timedelta(minutes=150 * attempt)),
+            timedelta(minutes=200 * attempt)),
         slurm_extra=" --constraint=gbit"
 
     shell:
@@ -117,9 +117,9 @@ rule fastp_pe:
         adapters  = dir_input + "/adapt.fas", 
         extra     = "--qualified_quality_phred 4"
     resources:
-        mem_mb=lambda wildcards, input, threads, attempt: 50000 * attempt,
+        mem_mb=lambda wildcards, input, threads, attempt: 30000 * attempt,
         runtime=lambda wildcards, input, threads, attempt: str(
-            timedelta(minutes=1000 * attempt)),  
+            timedelta(minutes=500 * attempt)),  
         slurm_extra=" --constraint=gbit"
     threads: 
         config["techpar"]["threads"]
@@ -149,8 +149,8 @@ rule bbduk_pe:
     params:
         extra     = lambda w, input: "ref={},adapters,artifacts ktrim=r k=23 mink=11 hdist=1 tpe tbo trimpolygright=10 minlen=25 maxns=30 entropy=0.5 entropywindow=50 entropyk=5".format(input.adapters),
     resources:
-        mem_mb=lambda wildcards, input, threads, attempt: 100000 * attempt,
-        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=1500 * attempt)),
+        mem_mb=lambda wildcards, input, threads, attempt: 70000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=800 * attempt)),
         slurm_extra=" --constraint=gbit"
     threads: 
         config["techpar"]["threads"]
@@ -178,8 +178,8 @@ rule human_filtering:
         # we use now CHM13, updated whole human genome
         hostDB  = config["DB"]["CHM13"]
     resources:
-        mem_mb=lambda wildcards, input, threads, attempt: 150000 * attempt,
-        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=1500 * attempt)),  
+        mem_mb=lambda wildcards, input, threads, attempt: 80000 * attempt,
+        runtime=lambda wildcards, input, threads, attempt: str(timedelta(minutes=900 * attempt)),  
         slurm_extra=" --constraint=gbit"      
     threads: 
         config["techpar"]["threads"]
@@ -206,7 +206,7 @@ rule samtools_view:
     log:
         dir_output + "/logs/samtools/{sample}.log"
     resources:
-        mem_mb      =lambda wildcards, input, threads, attempt: 100000 * attempt,
+        mem_mb      =lambda wildcards, input, threads, attempt: 80000 * attempt,
         runtime     =lambda wildcards, input, threads, attempt: str(timedelta(minutes=1000 * attempt)),
     params:
         extra       ="-f 12 -F 256"  # optional params string
@@ -228,7 +228,7 @@ rule samtools_fastq_separate:
     log:
         dir_output + "/logs/samtools/{sample}.separate.log"
     resources:
-        mem_mb      =lambda wildcards, input, threads, attempt: 100000 * attempt,
+        mem_mb      =lambda wildcards, input, threads, attempt: 80000 * attempt,
         runtime     = lambda wildcards, input, threads, attempt: str(timedelta(minutes=1000 * attempt)),
     params:
         sort="-m 4G",
