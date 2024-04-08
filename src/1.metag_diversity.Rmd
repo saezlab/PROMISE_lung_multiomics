@@ -1,7 +1,7 @@
 ---
-title: "Promise trial diversity analysis"
+title: "Diversity analysis of fecal metagenomics dataset"
 author: "Ece Kartal"
-date: "5.12.2023"
+date: "5.12.2022"
 output: html_document
 ---
 
@@ -46,8 +46,6 @@ threshold <- 10^-5
 
 ```{r warning=FALSE, echo=FALSE, message=FALSE}
 # load metadata 
-# meta <- read_excel(paste0(PARAM$folder.input,
-#                           "metadata/clean/Metadata_PROMISEv2.xlsx"))
 load(paste0(PARAM$folder.Rdata,"metaBatch123.Rdata"))
 # load taxonomy
 taxa <- read.csv(paste0(PARAM$folder.input, "/db_mOTU/db_mOTU_taxonomy_ref-mOTUs.tsv"), 
@@ -143,13 +141,11 @@ duplicated_samples <- meta %>%
   ungroup()
 
 ##########FOR now I exclude frist batch comepletely
-meta =meta %>%
+meta = meta %>%
   filter(Sequencing_batch!=0)
 ```
 
 These results show that we can pool samples except "Promo106". A significant p-value will mean that, in terms of composition, variation within-duplicates will be smaller than variation between the duplicates and all other samples, so both duplicates should be equivalent
-
-
 
 ################################################################################
 ### Diversity Analysis
@@ -242,12 +238,15 @@ p.alpha <- alpha.div.com %>%
   facet_wrap(. ~ metric, scale="free") +
   theme_classic()+
   labs(x = "")+
-  theme(text = element_text(size=14),
-        axis.text.y = element_text(size=14),
+  theme(text = element_text(size=10),
+        axis.text.y = element_text(size=10),
         axis.title.x=element_blank(),
         axis.text.x=element_blank(),
         axis.ticks.x=element_blank(),
-        legend.position = "bottom") +
+        legend.position = "bottom",
+        strip.background = element_rect(fill = "white", 
+                                        colour = "white", 
+                                        linewidth = 1)) +
   scale_color_manual(name = "Timepoint",
                      labels = levels, 
                      values=TimepointColor) +
@@ -300,7 +299,7 @@ p.alpha.rar <- alpha.div.rar %>%
   filter(Timepoint %in% levels) %>%
   ggplot(aes(x=factor(metric, level=levels), y=value, fill=Timepoint)) + 
   geom_boxplot() + 
-  #stat_compare_means() + 
+  stat_compare_means(size=3) + 
   facet_wrap(. ~ metric, scale="free") +
   theme_classic()+
   labs(x = "")+
@@ -310,7 +309,9 @@ p.alpha.rar <- alpha.div.rar %>%
         axis.text.x=element_blank(),
         axis.ticks.x=element_blank(),
         legend.position = "bottom",
-            strip.background = element_rect(fill = "white", colour = "white", linewidth = 1)) +
+        strip.background = element_rect(fill = "white", 
+                                        colour = "white", 
+                                        linewidth = 1)) +
   scale_color_manual(name = "Timepoint",
                      labels = levels, 
                      values=TimepointColor) +
@@ -379,6 +380,8 @@ collect.confounders$p.adj <- p.adjust(collect.confounders$p.value)
 
 # Lets have a look to results
 collect.confounders
+save(collect.confounders,
+     file=paste0(PARAM$folder.Rdata, "cofounders.Rdata"))
 ```
 
 ################################################################################
@@ -489,7 +492,7 @@ ggsave(figure, filename=paste0(PARAM$folder.output,Sys.Date(), "betadiv.pdf"), w
 Comparison of Bray-Curtis measurements by using non-rarefied and rarefied reads showed no significant difference between the two sets of measurements. This suggests that the rarefication process did not have a significant impact on the beta diversity calculated using the Bray-Curtis metric. 
 
 ```{r adonisRarefied, echo=FALSE}
-# test.adonis <- adonis2(as.dist(beta_dist) ~ meta_nmds$Sequencing_batch)
+# test.adonis <- adonis2(as.dist(beta_dist) ~ meta_nmds$CHEMO)
 # # test.adonis
 # # # p.value here
 # test.adonis$aov.tab$`Pr(>F)`[1]
@@ -571,6 +574,24 @@ Majority of the samples in the pilot show a skew towards gram-negative bacteria.
 ```{r, echo=FALSE}
 #Subset frame
 frame.lr.bac_firm <- frame.phylum[frame.phylum$phylum == "976 Bacteroidetes" | frame.phylum$phylum == "1239 Firmicutes", ]
+
+# Assuming 'frame.lr.bac_firm' is your data frame
+# Replace 'Firmicutes' and 'Bacteroidetes' with the actual column names containing counts for these phyla
+
+# Step 1: Subset the dataframe
+subset_df <- frame.lr.bac_firm %>% 
+  filter(phylum == "1239 Firmicutes" | phylum == "976 Bacteroidetes")
+
+# Step 2: Calculate the ratio for each sample
+subset_df$Firmicutes <- as.numeric(subset_df$Firmicutes)  # Convert to numeric if necessary
+subset_df$Bacteroidetes <- as.numeric(subset_df$Bacteroidetes)  # Convert to numeric if necessary
+
+# Calculate the ratio, handle division by zero by setting NA in those cases
+subset_df$Firmicutes_Bacteroidetes_Ratio <- ifelse(subset_df$Bacteroidetes == 0, NA, subset_df$Firmicutes / subset_df$Bacteroidetes)
+
+# Display the results
+head(subset_df)  # Show the first few rows to check the results
+
 ```
 
 
