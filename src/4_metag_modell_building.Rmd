@@ -52,8 +52,8 @@ featTable=motu.rel
 metaTable=meta
 # choose the meta variables to test for confounding
 metatest = c("CHEMO", "IMMUN", "TARGET",  "Age", "Sex","Vital_status", "Timepoint",   
-             "days_to_death" ,"ReadCount (Homo)",  "lib_size_factor","lib_Homo_factor", 
-             "Cause of death","age_factor")
+             "days_to_death" , "ReadCount (Homo)", "lib_size_factor", "lib_Homo_factor", 
+             "Cause of death", "age_factor")
 ```
 
 ###############################################################################
@@ -72,6 +72,7 @@ Confounder check based on fisher exact test
 # fileName: filenema when saving all resutls 
 # case: comparison e.g cancer vs control, responder vs nonresponder. 
 # I am not using responder since we dont have the proper metadata yet. 
+
 runsiamcat <- function(featTable, metaTable, label, fileName, case, ml, norm){
   dim(featTable)
   # create SIAMCAT object and classify
@@ -102,14 +103,16 @@ runsiamcat <- function(featTable, metaTable, label, fileName, case, ml, norm){
   # evaluation plot
   model.evaluation.plot(siamcat, fn.plot = paste0(PARAM$folder.output, Sys.Date(), '.',
                                                   fileName, '.eval.plot.pdf'))
+  model.evaluation.plot(siamcat)
   # interpretation plot
   model.interpretation.plot(siamcat, fn.plot = paste0(PARAM$folder.output, 
                            Sys.Date(), '.', fileName,'.interpret.plot.pdf'),
                            consens.thres = 0.5,
                            heatmap.type = 'zscore')
-        
+  # interpretation plot to print
+  model.interpretation.plot(siamcat)
   # save siamcat object
-  save(siamcat, file = paste0(PARAM$folder.output, fileName, 'siamcat.Rdata'))
+  save(siamcat, file = paste0(PARAM$folder.output, fileName, '.siamcat.Rdata'))
   return(siamcat) 
 }
 
@@ -134,13 +137,14 @@ rownames(metas_subset) <- metas_subset$ID
 featTable <- featTable[, colnames(featTable) %in% overlap_columns]
 
 # Check if row names are identical to column names in 'feat'
-row_names_identical <- all(rownames(metas_subset) %in% colnames(featTable)) && length(rownames(metas_subset)) == ncol(featTable)
+row_names_identical <- all(rownames(metas_subset) %in% 
+                             colnames(featTable)) && length(rownames(metas_subset)) == ncol(featTable)
 # Print the result
 print(row_names_identical)
 
 ```
 
-```{r}
+```{r,message=FALSE, warning=FALSE, echo=FALSE}
 # run siamcat fpor example metavariables
 # normalisation and logistic regression method has to be selected based on the data and final question, this is only as an example. 
 
@@ -154,36 +158,41 @@ Here we can test if specific clinical variable have additional informative power
 to microbiome data. It has to be tested with full metadata
 ###############################################################################
 
-```{r}
+```{r, message=FALSE, warning=FALSE, echo=FALSE}
 # load models
-load(paste0(PARAM$folder.Rdata, "Sex.siamcat.Rdata"))
+load(paste0(PARAM$folder.output, "Sex.siamcat.Rdata"))
 siamcat.sex <- siamcat
 
 # add confounders to model
-add.meta <- function(x, n){
-  x <- add.meta.pred(x, pred.names = n, verbose=3)
-  x <- train.model(x, method='ridge', verbose=2, perform.fs = TRUE,
-                   param.fs = list(thres.fs=50, method.fs='gFC', 
-                                   direction='positive'))
+
+add.meta <- function(x, n) {
+  x <- add.meta.pred(x, pred.names = n, verbose = 3)
+  x <- train.model(x, method = 'ridge', verbose = 2, perform.fs = TRUE)
   x <- make.predictions(x)
   x <- evaluate.predictions(x)
   return(x)
 }
-# combine with naive model
-siamcat.age <- add.meta(siamcat.sex, 'Age')
 
+# combine with naive model
+siamcat.vit <- add.meta(siamcat.sex, 'Vital_status')
 
 model.evaluation.plot('Only Sex model'= siamcat.sex,
-                      'Age included model'=siamcat.age,
-                      fn.plot = paste0(PARAM$folder.results,  Sys.Date(),
-                                       'confounders.interpret.pdf'))
+                      'Vital status included model'= siamcat.vit)
+
+model.interpretation.plot(siamcat.vit)
+
+# save pdf
+model.evaluation.plot('Only Sex model'= siamcat.sex,
+                      'Vital status included model'= siamcat.vit,
+                      fn.plot = paste0(PARAM$folder.output,  Sys.Date(),
+                                       '.confounders.interpret.pdf'))
 
 # save confounder Rdata
-save(siamcat.naive, siamcat.age,
+save(siamcat.sex, siamcat.vit,
      file = paste0(PARAM$folder.files, Sys.Date(), 'confounder.RData'))
 ```
 
-
+Here I only showcase 2 examples, with final metadata and dataset this analysis has to be repeated btw responders and non-responders.
 ```{r session_info}
 sessionInfo()
 ```
