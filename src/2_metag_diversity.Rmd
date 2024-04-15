@@ -1,8 +1,10 @@
 ---
 title: "Diversity analysis of fecal metagenomics dataset"
 author: "Ece Kartal"
-date: "5.12.2022"
-output: html_document
+date: "5.10.2023"
+output:
+  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE, echo=FALSE}
@@ -12,20 +14,17 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r warning=FALSE, echo=FALSE, message=FALSE}
 set.seed(183778)
 
-# load library
+# Load libraries
 library(gtools)
 library(readr)
 library(tidyverse)
 library(readxl)
 library(knitr)
-library(tidyverse)
 library(ggplot2)
 library(ggpubr)
 library(car)
 library(usedist)
 library(vegan)
-library(readxl)
-#library(Rarefy)
 
 # Set parameters
 PARAM <- list()
@@ -58,7 +57,7 @@ taxa <- read.csv(paste0(PARAM$folder.input, "/db_mOTU/db_mOTU_taxonomy_ref-mOTUs
 ## Results
 ################################################################################
 
-In this dataset, I analyzed `nrow(meta)` fecal shotgun samples from NSCLC cancer patients. The total read count in these samples ranged from `min(meta$ReadCount)` to `max(meta$ReadCount)` million. The overall host DNA contamination and low quality reads were less than 1%. 
+In this dataset, I analyzed fecal shotgun samples from NSCLC cancer patients. The total read count in these samples ranged from min(meta$'ReadCount (Microbiome)') to max(meta$'ReadCount (Microbiome)') million. The overall host DNA contamination and low-quality reads were less than 1%.
 
 ```{r loadData and clean, message=FALSE, warning=FALSE, echo=FALSE}
 # load motu files
@@ -74,7 +73,6 @@ for (i in seq_along(meta$Filename)) {
     colnames(motu.abs)[match_index] <- meta$ID[i]
   }
 }
-colnames(motu.abs)
 ```
 
 ```{r readcount_plot, message=FALSE, fig.width=10, fig.height=7, echo= FALSE}
@@ -103,28 +101,6 @@ p.readcount <- meta %>%
 
 p.readcount
 
-p.readcount <- meta %>%
-    filter(Timepoint %in% c("T1/T2", "6-10 week", "T2 extended", "T3",
-                            "T3 extended", "T4")) %>%
-  ggplot(aes(y = `ReadCount (Microbiome)`, x = factor(ID), 
-             fill = as.factor(Timepoint))) +
-  geom_col(stat = "identity", alpha = 0.5,
-           position = position_dodge2(width = 0.9, preserve = "single")) +
-  scale_color_manual(name = "Timepoint", values = TimepointColor) +
-  scale_fill_manual(name = "Timepoint", values = TimepointColor) +
-  facet_grid(. ~ Timepoint, scales = "free_x", space = "free_x", switch = "x") +
-  xlab("Samples") +
-  ylab("Number of Reads (Million)") +
-  ggtitle("Total read counts/sample") +
-  theme_bw() +
-  theme(
-    axis.text.x=element_blank(),
-    axis.ticks.x = element_blank(),
-    #axis.text.x = element_text(angle = 45, hjust = 1, size = 8), 
-        axis.text.y = element_text(size = 20),
-        legend.position = "bottom")
-
-p.readcount
 ggsave(p.readcount, filename=paste0(PARAM$folder.output, Sys.Date(),
                                     "-readcounts.pdf"), 
        width = 16, height = 7)
@@ -132,7 +108,6 @@ ggsave(p.readcount, filename=paste0(PARAM$folder.output, Sys.Date(),
 
 **Figure 1.** Total read count per sample
 
-We have samples sequenced twice. 
 ```{r  echo=FALSE, warning=FALSE, message=FALSE, fig.width=10, fig.height=10}
 # Identify Samples Sequenced Twice
 duplicated_samples <- meta %>%
@@ -157,13 +132,16 @@ Diversity in the ecological sense is intuitively understood as the complexity of
 # remove unassigned
 motu.abs <- motu.abs[!rownames(motu.abs) %in% c("unassigned"), ]
 
-# remove low prevelant and abundant taxa
+# remove low prevalent and abundant taxa
 motu.abs.f <- motu.abs[rowSums(motu.abs > 0) >= 2, colSums(motu.abs) >= 500]
 dim(motu.abs.f)
+
 # calculate relative abundance
 motu.rel <- prop.table(as.matrix(motu.abs.f), 2)
+
 # Calculate the row sums
 row_sums <- rowSums(motu.rel >= threshold, na.rm = TRUE)
+
 # Filter rows
 motu.rel <- motu.rel[rowSums(motu.rel > 0) >= 2, ]
 dim(motu.rel)
@@ -185,6 +163,7 @@ shared= motu.t %>%
 min_seq =400
 # plot rarefaction curves
 #rarecurve.data <- rarecurve(as.matrix(motu.t), step = 50, sample = min_seq)
+
 ```
 
 ```{r save files, message=FALSE, echo=FALSE}
@@ -204,7 +183,7 @@ Alpha diversity measures the diversity within a single sample and is generally b
 The `diversity` function from the vegan package can be used to calculate the alpha diversity of a set of samples. 
 
 ```{r message=FALSE, echo=FALSE}
-levels=c("T1/T2", "6-10 week", "T2 extended", "T3", "T3 extended", "T4")
+#levels=c("T1/T2", "6-10 week", "T2 extended", "T3", "T3 extended", "T4")
 alpha.div <- shared %>%
   dplyr::group_by(ID) %>%
   dplyr::summarize(richness = specnumber(value),
@@ -219,6 +198,12 @@ alpha.div.com <- left_join(alpha.div, meta, by="ID")
 alpha.div.com$Timepoint <- factor(alpha.div.com$Timepoint,
                                   levels = levels)
 ```
+
+**Figure 2.** Comparison of alpha diversity measurements with read counts. 
+
+As we can see, a higher read count increases the likelihood of detecting a greater diversity of species in the sample (richness).  
+
+We will use `rrarefy` function from vegan package for rarefaction
 
 ```{r plotAlpha, echo=FALSE}
 # lets compare the indices based on a scatter-plot.
@@ -253,18 +238,11 @@ p.alpha <- alpha.div.com %>%
   scale_fill_manual(name = "Timepoint", 
                     labels = levels,
                     values=TimepointColor)
-
 p.alpha
 # save plot
 ggsave(p.alpha, filename=paste0(PARAM$folder.output, Sys.Date(), "-alpha.div.nonrar.pdf"),
        height = 12, width = 12, unit="cm")
 ```
-
-**Figure 3.** Comparison of alpha diversity measurements with read counts. 
-
-As we can see, a higher read count increases the likelihood of detecting a greater diversity of species in the sample (richness).  
-
-We will use `rrarefy` function from vegan package for rarefaction
 
 ```{r, echo=FALSE}
 # transform, rarefy
@@ -273,7 +251,9 @@ feat.rare <- rrarefy(motu.abs, min_seq)
 ```
 
 ```{r calculateRarefiedAlpha, echo=FALSE}
-shared= t(feat.rare) %>% as_tibble(rownames="ID") %>% pivot_longer(-ID)
+shared= t(feat.rare) %>% 
+  as_tibble(rownames="ID") %>% 
+  pivot_longer(-ID)
 
 alpha.div.r <- shared %>%
   dplyr::group_by(ID) %>%
@@ -318,10 +298,13 @@ p.alpha.rar <- alpha.div.rar %>%
   scale_fill_manual(name = "Timepoint", 
                     labels = levels,
                     values=TimepointColor)
-p.alpha.rar
 
+p.alpha.rar
 # save plot
-ggsave(p.alpha.rar, filename=paste0(PARAM$folder.output, Sys.Date(), "-alpha.div.rar.pdf"),
+ggsave(p.alpha.rar, 
+       filename=paste0(PARAM$folder.output, 
+                       Sys.Date(), 
+                       "-alpha.div.rar.pdf"),
         height = 12, width = 12, unit="cm")
 ```
 
@@ -329,19 +312,18 @@ ggsave(p.alpha.rar, filename=paste0(PARAM$folder.output, Sys.Date(), "-alpha.div
 # print both plots
 figure.alpha <- ggarrange(p.alpha, p.alpha.rar,
                     labels = c("A.", "B."),
-                    ncol = 2, nrow = 1)+
-  xlab("")
-figure.alpha
+                    ncol = 2, nrow = 1) + xlab("")
+
 # save plot
 ggsave(figure.alpha, filename=paste0(PARAM$folder.output, 
                                      Sys.Date(),
                                      "alpha.combined.123.pdf"),
-        height = 12, width = 12, unit="cm")
+        height = 15, width = 12, unit="cm")
 ```
 
-**Figure 4.** Comparison of alpha diversity measurements between non-rarefied and rarefied reads. 
+**Figure 3.** Comparison of alpha diversity measurements between non-rarefied and rarefied reads. 
 
-As seen in the figure, when we rarefy samples, we loose a lot of low abundant species, that would change the diversity measurements. 
+As seen in the figure, when we rarefy samples, we loose a lot of low abundant species, that would change the diversity measurements.Samples with high read counts by default have a higher species richness that we should be aware when comapring richness between 2 conditions 
 
 ```{r savealpha, echo=FALSE}
 save(alpha.div, 
@@ -383,6 +365,9 @@ collect.confounders
 save(collect.confounders,
      file=paste0(PARAM$folder.Rdata, "cofounders.Rdata"))
 ```
+Here we can see the significance of meta variables over the richness metric. As seen, `Age` and `days_to_death` show a high significant p value which mean that affects the richness of samples. 
+
+
 
 ################################################################################
 ### Beta (between sample) Diversity Analysis
@@ -428,7 +413,6 @@ p.betadiv.ord <-   meta_nmds %>%
         axis.text.x = element_text(size=14),
         axis.text.y = element_text(size=14)) 
 
-p.betadiv.ord
 ggsave(p.betadiv.ord, 
        filename=paste0(PARAM$folder.output, 
                        Sys.Date(), "beta_nonrar.pdf"),
@@ -474,7 +458,7 @@ p.betadiv.ord.rar <-   meta_nmds.rar %>%
         axis.text.x = element_text(size=13),
         axis.text.y = element_text(size=13)) 
  
-p.betadiv.ord.rar
+
 ggsave(p.betadiv.ord.rar, filename=paste0(PARAM$folder.output,
                                           Sys.Date(),"beta_rar123.pdf"),
         height = 15, width = 13, unit="cm")
@@ -484,10 +468,13 @@ figure <- ggarrange(p.betadiv.ord, p.betadiv.ord.rar,
                     labels = c("A", "B"),
                     ncol = 2, nrow = 1)
 figure
-ggsave(figure, filename=paste0(PARAM$folder.output,Sys.Date(), "betadiv.pdf"), width = 15, height = 8)
+ggsave(figure, filename=paste0(PARAM$folder.output,
+                               Sys.Date(), 
+                               "betadiv.pdf"), 
+       width = 15, height = 8)
 ```
 
-**Figure 5.** Comparison of beta diversity measurements between non-rarefied and rarefied reads. 
+**Figure 4.** Comparison of beta diversity measurements between non-rarefied and rarefied reads. 
 
 Comparison of Bray-Curtis measurements by using non-rarefied and rarefied reads showed no significant difference between the two sets of measurements. This suggests that the rarefication process did not have a significant impact on the beta diversity calculated using the Bray-Curtis metric. 
 
@@ -515,7 +502,8 @@ taxa$species=str_split_fixed(taxa$mOTU, pattern = " ", n=2)[,2]
 taxa$name <- paste0(taxa$species, " [", taxa$ref.mOTU_v2_ID, "]")
 
 df = as.data.frame(motu.abs.f)
-frame.phylum <- dplyr::full_join(df %>% mutate(name = rownames(df)), taxa, by = 'name') %>% 
+frame.phylum <- dplyr::full_join(df %>% 
+                                   mutate(name = rownames(df)), taxa, by = 'name') %>% 
   as.tibble()
 
 frame.phylum <- frame.phylum %>%
@@ -567,36 +555,10 @@ ggsave(p.gram, filename = paste0(PARAM$folder.output, Sys.Date(), "gram_bias.pdf
        width = 15, height = 10, unit = "cm")
 ```
 
-**Figure 6.** Comparison of most abundant gram positive and gram negative phylum
+**Figure 5.** Comparison of most abundant gram positive and gram negative phylum
 
 Majority of the samples in the pilot show a skew towards gram-negative bacteria. It is important to carefully examine any outliers, such as the absence of gram-negative bacteria in sample 165. This could be due to a variety of factors, including errors in the sampling or analysis process, or it could indicate the presence of unique characteristics or conditions in that sample that are not present in the others. We should carefully check the detailed metadata to understand the underlying reasons.  
 
-```{r, echo=FALSE}
-#Subset frame
-frame.lr.bac_firm <- frame.phylum[frame.phylum$phylum == "976 Bacteroidetes" | frame.phylum$phylum == "1239 Firmicutes", ]
-
-# Assuming 'frame.lr.bac_firm' is your data frame
-# Replace 'Firmicutes' and 'Bacteroidetes' with the actual column names containing counts for these phyla
-
-# Step 1: Subset the dataframe
-subset_df <- frame.lr.bac_firm %>% 
-  filter(phylum == "1239 Firmicutes" | phylum == "976 Bacteroidetes")
-
-# Step 2: Calculate the ratio for each sample
-subset_df$Firmicutes <- as.numeric(subset_df$Firmicutes)  # Convert to numeric if necessary
-subset_df$Bacteroidetes <- as.numeric(subset_df$Bacteroidetes)  # Convert to numeric if necessary
-
-# Calculate the ratio, handle division by zero by setting NA in those cases
-subset_df$Firmicutes_Bacteroidetes_Ratio <- ifelse(subset_df$Bacteroidetes == 0, NA, subset_df$Firmicutes / subset_df$Bacteroidetes)
-
-# Display the results
-head(subset_df)  # Show the first few rows to check the results
-
-```
-
-
-## Conclusion and next steps
-Overall, the dataset appears to be in good condition and we will be able to move forward with our analysis as soon as we receive the metadata.
 
 ```{r sessionInfo, echo=FALSE, warning=FALSE, message=FALSE}
  sessionInfo()

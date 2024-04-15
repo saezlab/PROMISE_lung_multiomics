@@ -1,9 +1,13 @@
 ---
-title: "fix meta"
-output: html_notebook
+title: "Metadata curation"
+author: "Ece Kartal"
+date: "5.10.2022"
+output:
+  pdf_document: default
+  html_document: default
 ---
 
-Metadata is in several excel sheet, we firts combine them to work with it.
+Metadata is in several excel sheet, we first combine them to work with it.
 ```{r}
 # Set parameters
 PARAM <- list()
@@ -50,7 +54,7 @@ meta3=distinct(meta3)
 #   pivot_wider(names_from = Timepoint, values_from = Note)
 df1 <- Metadata_PROMISE %>%
   left_join(meta2, by = c("StudienID", "Timepoint"))
-  #left_join(meta3, by = c("StudienID", "Timepoint")) 
+ # left_join(meta3, by = c("StudienID", "Timepoint")) 
 
 df2  <- df1 %>%
   left_join(meta1, by = c("StudienID"))
@@ -58,16 +62,35 @@ df3 <- df2 %>%
   full_join(mqc_kraken, by = c("Filename"))
 ```
 
+Response variable can not be added because so many patients have double coded respoonse that does not make sense.
+For e.g. SD (Stable disease) and PD (Progressive disease) for the same patient and same timepoint 
 ```{r}
 meta=df3
 meta$`ReadCount (Microbiome)` = as.integer(meta$`ReadCount (Microbiome)`)
-meta$ID <- paste0(meta$SampleName, "_", meta$Timepoint, "_", meta$Sequencing_batch)
+meta$ID <- paste0(meta$SampleName, "_", meta$Timepoint, "_", meta$Sequencing_batch, "_",meta$Resubmission )
 
-# recode all the T2 extended as T3 after taslking with Inka
+#recode metadat continuous c=variables
 meta <- meta %>%
-  # mutate(Timepoint = ifelse(Timepoint == "T2 extended", "T3", Timepoint)) %>%
   mutate(Timepoint = ifelse(Timepoint == "0", "Control", Timepoint)) %>%
-  filter(Sequencing_batch %in% c(0,1,2,3))
+  filter(Sequencing_batch %in% c(0, 1, 2, 3)) %>%
+  mutate(
+    age_factor = as.factor(
+      cut(Age, 
+          breaks = quantile(Age, na.rm = TRUE), 
+          labels = c(1, 2, 3, 4), na.rm = TRUE)
+    ),
+    lib_size_factor = as.factor(
+      cut(`ReadCount (Microbiome)`, 
+          breaks = quantile(`ReadCount (Microbiome)`, na.rm = TRUE), 
+          labels = c(1, 2, 3, 4), na.rm = TRUE)
+    ),
+    lib_Homo_factor = as.factor(
+      cut(`ReadCount (Homo)`, 
+          breaks = quantile(`ReadCount (Homo)`, na.rm = TRUE), 
+          labels = c(1, 2, 3, 4), na.rm = TRUE)
+    )
+  )
+
 ```
 
 ```{r save files, message=FALSE, echo=FALSE}

@@ -1,17 +1,26 @@
 ---
-title: "Pancreatic Cancer Model Building"
-output: html_document
+title: "Model building fecal metagenomics dataset"
+author: "Ece Kartal"
+date: "5.12.2023"
+output:
+  pdf_document: default
+  html_document: default
 ---
+
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+Here, we will use SIAMCAT for logistic regression model building. 
+This is only a placeholder since metadata is not yet finalised. 
+Based on the final set and numbers, the groups compared have to be updated 
+via **case** variable in siamcat function below. 
 SIAMCAT needs a feature matrix (matrix or data.frame) 
 features (in rows) samples (in columns)
 metadata in a data.frame, samples as row names
 
-```{r setup, include=FALSE}
+```{r, include=FALSE}
 # load library
 library("tidyverse")
 library("matrixStats")
@@ -31,14 +40,38 @@ PARAM$folder.data <- paste0(PARAM$folder, "data/")
 PARAM$folder.output <- paste0(PARAM$folder, "output/metaG/")
 
 # load data metag motu and genes
+# load metadata 
+load(paste0(PARAM$folder.Rdata,"metaBatch123.Rdata"))
+# load motu files
+load(paste0(PARAM$folder.Rdata,"metag.motus.batch123.Rdata"))
 
 ```
+
+```{r}
+featTable=motu.rel
+metaTable=meta
+# choose the meta variables to test for confounding
+metatest = c("CHEMO", "IMMUN", "TARGET",  "Age", "Sex","Vital_status", "Timepoint",   
+             "days_to_death" ,"ReadCount (Homo)",  "lib_size_factor","lib_Homo_factor", 
+             "Cause of death","age_factor")
+```
+
 ###############################################################################
+### Overview
 Function to run siamcat with centered log transformation (clr) normalization
 10 fold cross validation and 10 fold re-sampling
 Confounder check based on fisher exact test
 ###############################################################################
+
 ```{r}
+# norm:"rank.unit", "rank.std","log.std", "log.unit", "log.clr", "std", "pass"
+# ml: 'lasso', 'enet', 'ridge', 'lasso_ll', 'ridge_ll', 'randomForest'
+# featTable: relative abundance table
+# metaTable:metadata
+# label:column name of the comparison 
+# fileName: filenema when saving all resutls 
+# case: comparison e.g cancer vs control, responder vs nonresponder. 
+# I am not using responder since we dont have the proper metadata yet. 
 runsiamcat <- function(featTable, metaTable, label, fileName, case, ml, norm){
   dim(featTable)
   # create SIAMCAT object and classify
@@ -48,11 +81,11 @@ runsiamcat <- function(featTable, metaTable, label, fileName, case, ml, norm){
   siamcat <- filter.features(siamcat, filter.method = 'abundance', 
                             cutoff=0.001, verbose=3)
   check.confounders(siamcat, fn.plot = paste0(PARAM$folder.output, 
-                            fileName, 'confounders.pdf'),
+                            fileName, '.confounders.pdf'),
                             meta.in=metatest, verbose = 3)
         
   # normalize with log.clr
-  siamcat <- normalize.features(siamcat, norm.method = "log.clr", 
+  siamcat <- normalize.features(siamcat, norm.method = norm, 
                                 feature.type = 'filtered',
                                 norm.param = list(log.n0=1e-05, sd.min.q=1))
                                       
@@ -60,19 +93,20 @@ runsiamcat <- function(featTable, metaTable, label, fileName, case, ml, norm){
   siamcat <- check.associations(siamcat, feature.type = 'normalized')
         
   # train model
-  siamcat <- create.data.split(siamcat, num.folds =10, num.resample = 10)  
-  siamcat <- train.model(siamcat, method = "lasso_ll", verbose = 2)
+  siamcat <- create.data.split(siamcat, num.folds = 5, num.resample = 5) 
+  # has to be 10 and 10, I only use 5 for testing purpuses 
+  siamcat <- train.model(siamcat, method = ml, verbose = 2)
   siamcat <- make.predictions(siamcat)
   siamcat <- evaluate.predictions(siamcat)    
   print(siamcat@eval_data$auroc)
   # evaluation plot
   model.evaluation.plot(siamcat, fn.plot = paste0(PARAM$folder.output, Sys.Date(), '.',
-                                                  fileName, 'eval.plot.pdf'))
+                                                  fileName, '.eval.plot.pdf'))
   # interpretation plot
   model.interpretation.plot(siamcat, fn.plot = paste0(PARAM$folder.output, 
-                           Sys.Date(), '.', fileName,'interpret.plot.pdf'),
+                           Sys.Date(), '.', fileName,'.interpret.plot.pdf'),
                            consens.thres = 0.5,
-                          heatmap.type = 'zscore')
+                           heatmap.type = 'zscore')
         
   # save siamcat object
   save(siamcat, file = paste0(PARAM$folder.output, fileName, 'siamcat.Rdata'))
@@ -82,49 +116,53 @@ runsiamcat <- function(featTable, metaTable, label, fileName, case, ml, norm){
 ```
 
 ###############################################################################
-Spanish MetaG Taxonomic Modelling
+### MetaG Taxonomic Modelling
 ###############################################################################
 
 ```{r}
-# choose the meta variables to test
-metatest = c( "Age", "Sex","Vital_status", "Timepoint",   
-             "days_to_death" ,"ReadCount (Homo)")
-metatest = c("CHEMO", "IMMUN", "TARGET",  "Age", "Sex","Vital_status", "Timepoint",   
-             "days_to_death" ,"ReadCount (Homo)")
-# run siamcat
-metas=as.data.frame(meta)
+# prepare and subset proper meta and feat
+# I subset only T1/T2 for some meaningful comparisons
+metas=as.data.frame(meta) %>%
+ filter(Timepoint %in% "T1/T2")
 overlap_columns <- intersect(metas$ID, colnames(featTable))
 metas_subset <- metas %>%
   filter(ID %in% overlap_columns)
 metas_subset <- metas_subset[!duplicated(metas_subset$ID), ]
 rownames(metas_subset) <- metas_subset$ID
+
+# subset featTable
+featTable <- featTable[, colnames(featTable) %in% overlap_columns]
+
 # Check if row names are identical to column names in 'feat'
 row_names_identical <- all(rownames(metas_subset) %in% colnames(featTable)) && length(rownames(metas_subset)) == ncol(featTable)
 # Print the result
 print(row_names_identical)
 
+```
 
-# run model
-runsiamcat(featTable, metas_subset,"IMMUN", "IMMUN", "0")
-runsiamcat(featTable, metas_subset,"CHEMO", "CHEMO", "0")
+```{r}
+# run siamcat fpor example metavariables
+# normalisation and logistic regression method has to be selected based on the data and final question, this is only as an example. 
+
+runsiamcat(featTable, metas_subset, "Sex", "Sex", "Female", 'ridge', "log.std" ) 
+runsiamcat(featTable, metas_subset, "Vital_status", "Vital_status", "0", 'ridge', "log.std" ) 
 ```
 
 ###############################################################################
-Add confounders to metaG models
+### Add confounders to metaG models
+Here we can test if specific clinical variable have additional informative power
+to microbiome data. It has to be tested with full metadata
 ###############################################################################
 
 ```{r}
 # load models
-load(paste0(PARAM$folder.Rdata, "st.naive.Rdata"))
-siamcat.pc <- siamcat
-
-load(paste0(PARAM$folder.Rdata, "st.constrain.enriched.Rdata"))
-siamcat.pos <- siamcat
+load(paste0(PARAM$folder.Rdata, "Sex.siamcat.Rdata"))
+siamcat.sex <- siamcat
 
 # add confounders to model
 add.meta <- function(x, n){
   x <- add.meta.pred(x, pred.names = n, verbose=3)
-  x <- train.model(x, method='lasso_ll', verbose=2, perform.fs = TRUE,
+  x <- train.model(x, method='ridge', verbose=2, perform.fs = TRUE,
                    param.fs = list(thres.fs=50, method.fs='gFC', 
                                    direction='positive'))
   x <- make.predictions(x)
@@ -132,17 +170,16 @@ add.meta <- function(x, n){
   return(x)
 }
 # combine with naive model
-siamcat.jau <- add.meta(siamcat.pc, 'jaundice')
-siamcat.col <- add.meta(siamcat.pc, 'cholesterol')
+siamcat.age <- add.meta(siamcat.sex, 'Age')
 
 
-model.evaluation.plot('constrained-enrichment model'= siamcat.pos,
-                      'naive model'= siamcat.pc,
+model.evaluation.plot('Only Sex model'= siamcat.sex,
+                      'Age included model'=siamcat.age,
                       fn.plot = paste0(PARAM$folder.results,  Sys.Date(),
                                        'confounders.interpret.pdf'))
 
 # save confounder Rdata
-save(siamcat.pc, siamcat.pos,
+save(siamcat.naive, siamcat.age,
      file = paste0(PARAM$folder.files, Sys.Date(), 'confounder.RData'))
 ```
 
